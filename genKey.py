@@ -95,8 +95,8 @@ def devRandom(byteLen):
     print 'Collecting entropy from /dev/random. This may take up to 10 minutes...'
     subprocess.Popen('head -c ' + str(byteLen) + ' /dev/random > dev_rand_ent',   shell=True).wait()
     with open('dev_rand_ent', 'rb') as file:
-        entropy = file.readline()  
-        
+        entropy = file.readline()
+
     while (len(entropy) != byteLen):
         print 'Entropy collection from /dev/random failed. Trying again...'
         subprocess.Popen('head -c ' + str(byteLen) + ' /dev/random > dev_rand_ent',   shell=True).wait()
@@ -105,7 +105,7 @@ def devRandom(byteLen):
 
     print 'Done.\n\n\nShredding temporary entropy file...'
     subprocess.Popen('shred -n ' + str(OverwriteIterations) + ' -z -u dev_rand_ent', shell=True).wait()
-    
+
     return entropy
 
 
@@ -144,7 +144,7 @@ if (command == '-k'):
 if (command == '-h'):
     HWRNGEntropy    = True
     mode = 'HWRNG entropy'
-    
+
 
 if (command == '-b'):
     mixedEntropy    = True

@@ -167,11 +167,12 @@ os.chdir(sys.path[0])
 os.system('clear')
 print '\nTFC ' + version + ' || Key generator\n\nMode: ' + mode + '\n\n'
 
+
 if defOFile:
     outputFile = raw_input('No output file specified. Please enter output file name: ')
 
-if kernelEntropy:
 
+if kernelEntropy:
     if UseDevRandom:
         entropy = devRandom(128)
     else:
@@ -179,14 +180,11 @@ if kernelEntropy:
         entropy = os.urandom(128)
 
 
-
 if HWRNGEntropy:
     entropy = getHWRNG(128)
 
 
-
 if mixedEntropy:
-
     HWRNGent = getHWRNG(128)
 
     if UseDevRandom:

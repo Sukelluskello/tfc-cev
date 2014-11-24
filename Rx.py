@@ -1,39 +1,25 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import base64
 import binascii
 import csv
 import datetime
-import fileinput
-import getopt
-import hashlib
-import imp
-import io
 import math
 import os
-import random
-import re
-import readline
 import serial
-import string
 import subprocess
 import sys
-import time
-import zlib
 from time import sleep
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
-from ctypes import (cdll, c_char_p, c_int, c_uint64, create_string_buffer)
-from ctypes import (cdll, Structure, POINTER, pointer, c_char_p, c_int, c_uint32, create_string_buffer)
 
 
 
 ######################################################################
-#                              LICENCES                              #
+#                             LICENCE                                #
 ######################################################################
 
-# TFC-CEV
+# TFC-CEV (Cascading Encryption Version) || Rx.py
+version = 'CEV 0.4.12 beta'
+
 """
 This software is part of the TFC application, which is free software:
 You can redistribute it and/or modify it under the terms of the GNU
@@ -45,107 +31,6 @@ WARRANTY; without even the implied warranty of MERCHANTABILITY or
 FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
 for more details. For a copy of the GNU General Public License, see
 <http://www.gnu.org/licenses/>.
-
-TFC-CEV (Cascading Encryption Version)
-Rx.py
-"""
-
-version = '0.4.11 beta'
-
-# Licences of encryption libraries
-
-# Keccak
-"""
-Algorithm Name: Keccak
-Authors: Guido Bertoni, Joan Daemen, Michael Peeters and Gilles Van Assche
-Implementation by Renaud Bauvin, STMicroelectronics
-
-This code, originally by Renaud Bauvin, is hereby put in the public domain.
-It is given as is, without any guarantee.
-
-For more information, feedback or questions, please refer to our website:
-http://keccak.noekeon.org/
-"""
-
-# Salsa20
-"""
-This file is part of Python Salsa20
-a Python bridge to the libsodium C [X]Salsa20 library
-Released under The BSD 3-Clause License
-Copyright (c) 2013 Keybase
-Python module and ctypes bindings
-"""
-
-# Twofish
-"""
-This file is part of Python Twofish a Python bridge to the C Twofish library by Niels Ferguson
-Released under The BSD 3-Clause License
-Copyright (c) 2013 Keybase
-Python module and ctypes bindings
-"""
-
-# AEC- GCM
-"""
-#  Cipher/AES.py : AES
-# ===================================================================
-# The contents of this file are dedicated to the public domain.  To
-# the extent that dedication to the public domain is not available,
-# everyone is granted a worldwide, perpetual, royalty-free,
-# non-exclusive license to exercise all rights associated with the
-# contents of this file for any purpose whatsoever.
-# No rights are reserved.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
-# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
-# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-
-PyCrypto licence (https://raw.githubusercontent.com/dlitz/pycrypto/master/COPYRIGHT)
-To the best of our knowledge, with the exceptions noted below or
-within the files themselves, the files that constitute PyCrypto are in
-the public domain. Most are distributed with the following notice:
-The contents of this file are dedicated to the public domain. To
-the extent that dedication to the public domain is not available,
-everyone is granted a worldwide, perpetual, royalty-free,
-non-exclusive license to exercise all rights associated with the
-contents of this file for any purpose whatsoever.
-
-No rights are reserved.
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
-BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
-ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-"""
-
-# Diffie-Hellman Key Exchange
-"""
-PyDHE - Diffie-Hellman Key Exchange in Python
-Copyright (C) 2013 by Mark Loiseau
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
-For more information:
-http://blog.markloiseau.com/2013/01/diffie-hellman-tutorial-in-python/
 """
 
 
@@ -154,20 +39,22 @@ http://blog.markloiseau.com/2013/01/diffie-hellman-tutorial-in-python/
 #                           CONFIGURATION                            #
 ######################################################################
 
-os.chdir(sys.path[0])
+fileSavingAllowed  = False
+debugging          = False
+logMessages        = False
+injectionTesting   = False
 
-timeStampFmt            = '%Y-%m-%d//%H:%M:%S'
-kfOWIterations          = 3
-remoteLogChangeAllowed  = True
-fileSavingAllowed       = False
-logTamperingEvent       = True
-logReplayedEvent        = True
-showLongMsgWarning      = True
-debugging               = False
-logMessages             = False
-injectionTesting        = False
+logChangeAllowed   = True
+logTamperingEvent  = True
+logReplayedEvent   = True
+showLongMsgWarning = True
+displayTime        = True
 
-localTesting    = True
+logTimeStampFmt    = '%Y-%m-%d / %H:%M:%S'
+displayTimeFmt     = '%H:%M'
+kfOWIterations     = 3
+
+localTesting       = True
 
 if not localTesting:
     port        = serial.Serial('/dev/ttyAMA0', baudrate=9600, timeout=0.1)
@@ -177,6 +64,21 @@ if not localTesting:
 ######################################################################
 #                          KECCAK STREAM CIPHER                      #
 ######################################################################
+
+"""
+Algorithm Name: Keccak
+
+Authors: Guido Bertoni, Joan Daemen, Michael Peeters and Gilles
+Van Assche Implementation by Renaud Bauvin, STMicroelectronics
+
+This code, originally by Renaud Bauvin, is hereby put in the public
+domain. It is given as is, without any guarantee.
+
+For more information, feedback or questions, please refer to our
+website: http://keccak.noekeon.org/
+"""
+
+
 
 class KeccakError(Exception):
     """Class of error used in the Keccak implementation
@@ -188,6 +90,8 @@ class KeccakError(Exception):
     def __str__(self):
         return repr(self.value)
 
+
+
 class Keccak:
     """
     Class implementing the Keccak sponge function
@@ -197,6 +101,8 @@ class Keccak:
 
         b: parameter b, must be 25, 50, 100, 200, 400, 800 or 1600 (default value)"""
         self.setB(b)
+
+
 
     def setB(self,b):
         """Set the value of the parameter b (and thus w,l and nr)
@@ -250,12 +156,16 @@ class Keccak:
 
     ## Generic utility functions
 
+
+
     def rot(self,x,n):
         """Bitwise rotation (to the left) of n bits considering the \
         string of bits is w bits long"""
 
         n = n%self.w
         return ((x>>(self.w-n))+(x<<n))%(1<<self.w)
+
+
 
     def enc(self,x,n):
         """Encode the integer x in n bits (n must be a multiple of 8)"""
@@ -265,6 +175,8 @@ class Keccak:
         if n%8!=0:
             raise KeccakError.KeccakError('n must be a multiple of 8')
         return ("%%0%dX" % (2*n//8)) % (x)
+
+
 
     def fromHexStringToLane(self, string):
         """Convert a string of bytes written in hexadecimal to a lane value"""
@@ -281,6 +193,8 @@ class Keccak:
             temp+=string[offset:offset+2]
         return int(temp, 16)
 
+
+
     def fromLaneToHexString(self, lane):
         """Convert a lane value to a string of bytes written in hexadecimal"""
 
@@ -292,6 +206,8 @@ class Keccak:
             offset=(nrBytes-i-1)*2
             temp+=laneHexBE[offset:offset+2]
         return temp.upper()
+
+
 
     def printState(self, state, info):
         """Print on screen the state of the sponge function preceded by \
@@ -307,8 +223,9 @@ class Keccak:
                  line.append(hex(state[x][y]))
             print('\t%s' % line)
 
-    ### Conversion functions String <-> Table (and vice-versa)
 
+
+    ### Conversion functions String <-> Table (and vice-versa)
     def convertStrToTable(self,string):
         """Convert a string of bytes to its 5x5 matrix representation
 
@@ -333,6 +250,8 @@ class Keccak:
                 output[x][y]=self.fromHexStringToLane(string[offset:offset+(2*self.w//8)])
         return output
 
+
+
     def convertTableToStr(self,table):
         """Convert a 5x5 matrix representation to its string representation"""
 
@@ -351,6 +270,8 @@ class Keccak:
         return output
 
     ### Padding function
+
+
 
     def pad(self,M, n):
         """Pad M with reverse-padding to reach a length multiple of n
@@ -395,6 +316,8 @@ class Keccak:
             my_string=my_string+'00'
         return my_string
 
+
+
     def Round(self,A,RCfixed):
         """Perform one round of computation as defined in the Keccak-f permutation
 
@@ -437,6 +360,8 @@ class Keccak:
 
         return A
 
+
+
     def KeccakF(self,A, verbose=False):
         """Perform Keccak-f function on the state A
 
@@ -455,6 +380,8 @@ class Keccak:
                   self.printState(A,"Satus end of round #%d/%d" % (i+1,self.nr))
 
         return A
+
+
 
     def Keccak(self,M,r=1024,c=576,d=0,n=1024,verbose=False):
         """Compute the Keccak[r,c,d] sponge function on message M
@@ -526,72 +453,76 @@ class Keccak:
 
         return Z[:2*n//8]
 
-def stringtoHex(string):
-    lst = []
-    for char in string:
-        hexValue = hex(ord(char)).replace('0x', '')
-        if len(hexValue) == 1:
-            hexValue = '0' + hexValue
-        lst.append(hexValue)
-    return reduce(lambda x,y : x+y, lst)
 
-def keccak256(hashInput):
-    hexMsg       = stringtoHex(hashInput)
-    hashfunction = Keccak()
-    return hashfunction.Keccak((512, hexMsg), 1088, 512, 0, 256, 0)    # Verbose Keccak hash function presentation when checkKeyHashes is enabled
+
+def keccak_256(hashInput):
+    hexMsg       = binascii.hexlify(hashInput)
+    return Keccak().Keccak(((8 * len(hashInput)), hexMsg), 1088, 512, 0, 256, 0)
+
+
+
 
 def keccak_decrypt(ciphertext, HexKey):
 
-    # CTR mode, no authentication
+    # CTR mode, no authentication.
 
-    # Convert hexadecimal key to binary data
+    # Convert hexadecimal key to binary data.
     key        = binascii.unhexlify(HexKey)
 
-    # Separate 256-bit nonce from ciphertext
-    nonce2     = ciphertext[:32]
-    enc        = ciphertext[32:]
+    # Separate 256-bit nonce from ciphertext.
+    nonce      = ciphertext[:32]
+    ciphertext = ciphertext[32:]
 
-    # Generate 512-bit IV
-    iv         = (key + nonce2)
+    # Generate 512-bit IV.
+    iv         = (key + nonce)
 
-    # Sponge function takes 512-bit IV, squeezes out 256 bit keystream block #1
-    step       = keccak256(iv)
+    # Sponge function takes 512-bit IV, squeezes out 256 bit keystream block #1.
+    step       = keccak_256(iv)
 
-    i          = 1
+    i          = 0
     keystream  = ''
 
-    # For n-byte message, n/32 additional rounds is needed to generate proper length keystream
-    while (i < (len(ciphertext) / 32) ):
+    # For n-byte message, n/32 additional rounds is needed to generate proper length keystream.
+    while i < (len(ciphertext) / 32):
         keystream += step
-        step       = keccak256(step)
+        step       = keccak_256(key + step)
         i         += 1
 
-    # Convert key from hex format to binary
+    # Convert key from hex format to binary.
     keystreamBIN   = binascii.unhexlify(keystream)
 
-    # XOR keystream with plaintext to acquire ciphertext
-    if len(enc) == len(keystreamBIN):
-        plaintext      = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(enc, keystreamBIN))
+    # XOR keystream with plaintext to acquire ciphertext.
+    if len(ciphertext) == len(keystreamBIN):
+        plaintext  = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ciphertext, keystreamBIN))
     else:
-        print 'Ciphertext - keystream length mismatch (Keccak). Exiting'
+        os.system('clear')
+        print '\nCRITICAL ERROR! Keccak ciphertext - keystream length mismatch. Exiting.\n'
         exit()
 
-    # Remove padding
+    # Remove padding.
     plaintext      = plaintext[:-ord(plaintext[-1:])]
 
-
     return plaintext
-
-def keccakVarLen(hashInput):
-    hexMsg       = stringtoHex(hashInput)
-    hashfunction = Keccak()
-    return hashfunction.Keccak(((8 * len(hashInput)), hexMsg), 1088, 512, 0, 256, 0)    # Verbose Keccak hash function presentation when checkKeyHashes is enabled
 
 
 
 ######################################################################
 #                        SALSA20 STREAM CIPHER                       #
 ######################################################################
+
+"""
+This file is part of Python Salsa20
+a Python bridge to the libsodium C [X]Salsa20 library
+Released under The BSD 3-Clause License
+
+Copyright (c) 2013 Keybase
+Python module and ctypes bindings
+"""
+
+import imp
+from ctypes import (cdll, c_char_p, c_int, c_uint64, create_string_buffer)
+from ctypes import (cdll, Structure, POINTER, pointer, c_char_p, c_int, c_uint32, create_string_buffer)
+
 
 _salsa20 = cdll.LoadLibrary(imp.find_module('_salsa20')[1])
 
@@ -630,12 +561,15 @@ _stream_xsalsa20_xor.argtypes = [  c_char_p,  # unsigned char * c
                                 ]
 _stream_xsalsa20_xor.restype = c_int
 
-
 IS_PY2 = sys.version_info < (3, 0, 0, 'final', 0)
+
+
 
 def _ensure_bytes(data):
     if (IS_PY2 and not isinstance(data, str)) or (not IS_PY2 and not isinstance(data, bytes)):
         raise TypeError('can not encrypt/decrypt unicode objects')
+
+
 
 def Salsa20_keystream(length, nonce, key):
     _ensure_bytes(nonce)
@@ -647,6 +581,8 @@ def Salsa20_keystream(length, nonce, key):
     outbuf = create_string_buffer(length)
     _stream_salsa20(outbuf, length, nonce, key)
     return outbuf.raw
+
+
 
 def Salsa20_xor(message, nonce, key):
     _ensure_bytes(nonce)
@@ -660,6 +596,8 @@ def Salsa20_xor(message, nonce, key):
     _stream_salsa20_xor(outbuf, message, len(message), nonce, key)
     return outbuf.raw
 
+
+
 def XSalsa20_keystream(length, nonce, key):
     _ensure_bytes(nonce)
     _ensure_bytes(key)
@@ -670,6 +608,8 @@ def XSalsa20_keystream(length, nonce, key):
     outbuf = create_string_buffer(length)
     _stream_xsalsa20(outbuf, length, nonce, key)
     return outbuf.raw
+
+
 
 def XSalsa20_xor(message, nonce, key):
     _ensure_bytes(nonce)
@@ -683,20 +623,19 @@ def XSalsa20_xor(message, nonce, key):
     _stream_xsalsa20_xor(outbuf, message, len(message), nonce, key)
     return outbuf.raw
 
+
+
 def salsa_20_decrypt(ciphertext, hexKey):
 
-    # Separate nonce from ciphertext
+    # Separate nonce from ciphertext.
     nonce      = ciphertext[:24]
-    ct         = ciphertext[24:]
+    ciphertext = ciphertext[24:]
 
-    # Convert uppercase hex to lowercase
-    hexKey     = hexKey.lower()
-
-    # Convert hexadecimal key to bitstring
+    # Convert hexadecimal key to bitstring.
     key        = binascii.unhexlify(hexKey)
 
-    # XOR ciphertext with keystream to acquire plaintext
-    plaintext  = XSalsa20_xor(ct, nonce, key)
+    # XOR ciphertext with keystream to acquire plaintext.
+    plaintext  = XSalsa20_xor(ciphertext, nonce, key)
 
     return plaintext
 
@@ -706,7 +645,18 @@ def salsa_20_decrypt(ciphertext, hexKey):
 #                        TWOFISH BLOCK CIPHER                        #
 ######################################################################
 
+"""
+This file is part of Python Twofish a Python bridge to the C Twofish library by Niels Ferguson
+Released under The BSD 3-Clause License
+Copyright (c) 2013 Keybase
+Python module and ctypes bindings
+"""
+
+import imp
+
 _twofish = cdll.LoadLibrary(imp.find_module('_twofish')[1])
+
+
 
 class _Twofish_key(Structure):
     _fields_ = [("s", (c_uint32 * 4) * 256),
@@ -740,9 +690,13 @@ _Twofish_initialise()
 
 IS_PY2 = sys.version_info < (3, 0, 0, 'final', 0)
 
+
+
 def _ensure_bytes(data):
     if (IS_PY2 and not isinstance(data, str)) or (not IS_PY2 and not isinstance(data, bytes)):
         raise TypeError('can not encrypt/decrypt unicode objects')
+
+
 
 class Twofish():
     def __init__(self, key):
@@ -753,6 +707,8 @@ class Twofish():
         self.key = _Twofish_key()
         _Twofish_prepare_key(key, len(key), pointer(self.key))
 
+
+
     def encrypt(self, data):
         if not len(data) == 16:
             raise ValueError('invalid block length')
@@ -761,6 +717,8 @@ class Twofish():
         outbuf = create_string_buffer(len(data))
         _Twofish_encrypt(pointer(self.key), data, outbuf)
         return outbuf.raw
+
+
 
     def decrypt(self, data):
         if not len(data) == 16:
@@ -771,9 +729,10 @@ class Twofish():
         _Twofish_decrypt(pointer(self.key), data, outbuf)
         return outbuf.raw
 
-# Repeat the test on the same vectors checked at runtime by the library
-def self_test():
 
+
+def self_test():
+    # Repeat the test on the same vectors checked at runtime by the library
     # 128-bit test is the I=3 case of section B.2 of the Twofish book.
     t128 = ('9F589F5CF6122C32B6BFEC2F2AE8C35A',
         'D491DB16E7B1C39E86CB086B789F5419',
@@ -798,49 +757,66 @@ def self_test():
         if not T.encrypt(p) == c or not T.decrypt(c) == p:
             raise ImportError('the Twofish library is corrupted')
 
+# Perform Twofish library self-test.
+self_test()
+
+
+
 def twofish_decrypt(ciphertext, HexKey):
 
-    # Separate nonce from ciphertext
-    nonce           = ciphertext[:16]
-    ciphertext      = ciphertext[16:]
+    # Separate nonce from ciphertext.
+    nonce          = ciphertext[:16]
+    ciphertext     = ciphertext[16:]
 
-    # Convert uppercase hex to lowercase
-    HexKey          = HexKey.lower()
+    # Convert hexadecimal key to binary data.
+    key            = binascii.unhexlify(HexKey)
 
-    # Convert hexadecimal key to binary data
-    key             = binascii.unhexlify(HexKey)
+    # n.o. keystream blocks equals the n.o. CT blocks.
+    ctArray        = [ciphertext[i:i + 16] for i in range(0, len(ciphertext), 16)]
 
-    # n.o. keystream blocks equals the n.o. CT blocks
-    ctArray         = [ciphertext[i:i + 16] for i in range(0, len(ciphertext), 16)]
-
-    counter         = 1
-    keystream       = ""
+    keystream      = ''
+    counter        = 1
 
     for block in ctArray:
-        # Convert integer counter to unique 16-byte counter
-        binrep      = str(bin(counter))[2:].zfill(128)
-        ctr         = ''.join(chr(int(binrep[i:i+8], 2)) for i in xrange(0, len(binrep), 8))
 
-        # XOR 128-bit nonce with 128-bit counter to change nonce-input of Twofish cipher
-        iv          = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ctr, nonce))
+        # Hash the counter value and output 64 hex numbers.
+        counterHash = keccak_256(str(counter))
 
-        # Initialize Twofish cipher with key
+        # Convert the digest to 32-bit binary.
+        counterBin  = binascii.unhexlify(counterHash)
+
+        # Truncate length to 128 bits.
+        ctr         = counterBin[:16]
+
+        # XOR 128-bit nonce with 128-bit hash of counter to create IV of Twofish cipher.
+        if len(ctr) == 16 and len(nonce) == 16:
+            iv       = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ctr, nonce))
+        else:
+            os.system('clear')
+            print '\nCRITICAL ERROR! Twofish counter hash - nonce length mismatch. Exiting.\n'
+            exit()
+
+        # Initialize Twofish cipher with key.
         E           = Twofish(key)
 
-        # Encrypt unique IV with key
+        # Encrypt unique IV with key.
         keyBlock    = E.encrypt(iv)
 
-        # Append new block to keystream
+        # Append new block to keystream.
         keystream  += keyBlock
 
-        # Iterate the counter of randomized CTR mode
+        # Increase the counter of randomized CTR mode.
         counter    += 1
 
-    # XOR keystream with ciphertext to acquire plaintext
-    plaintext = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ciphertext, keystream))
+    # XOR keystream with ciphertext to acquire plaintext.
+    if len(ciphertext) == len(keystream):
+        plaintext = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ciphertext, keystream))
+    else:
+        print '\nCRITICAL ERROR! Twofish ciphertext - keystream length mismatch. Exiting.\n'
+        exit()
 
-    # Remove padding
-    plaintext      = plaintext[:-ord(plaintext[-1:])]
+    # Remove padding.
+    plaintext     = plaintext[:-ord(plaintext[-1:])]
 
     return plaintext
 
@@ -850,378 +826,408 @@ def twofish_decrypt(ciphertext, HexKey):
 #     AES (GCM) AUTHENTICATED ENCRYPTION (RIJNDAEL BLOCK CIPHER)     #
 ######################################################################
 
+"""
+#  Cipher/AES.py : AES
+# ===================================================================
+# The contents of this file are dedicated to the public domain.  To
+# the extent that dedication to the public domain is not available,
+# everyone is granted a worldwide, perpetual, royalty-free,
+# non-exclusive license to exercise all rights associated with the
+# contents of this file for any purpose whatsoever.
+# No rights are reserved.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+PyCrypto licence (https://raw.githubusercontent.com/dlitz/pycrypto/master/COPYRIGHT)
+To the best of our knowledge, with the exceptions noted below or
+within the files themselves, the files that constitute PyCrypto are in
+the public domain. Most are distributed with the following notice:
+The contents of this file are dedicated to the public domain. To
+the extent that dedication to the public domain is not available,
+everyone is granted a worldwide, perpetual, royalty-free,
+non-exclusive license to exercise all rights associated with the
+contents of this file for any purpose whatsoever.
+No rights are reserved.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+
+from Crypto.Cipher import AES
+
+
+try:
+    import Crypto.Random.random
+    secure_random = Crypto.Random.random.getrandbits
+
+except ImportError:
+    import OpenSSL
+    print 'WARNING Failed to import Crypto.Random, trying OpenSSL instead.'
+    secure_random = lambda x: long(hexlify(OpenSSL.rand.bytes(x>>3)), 16)
+
+
+
 def AES_GCM_decrypt(ctInput, hexKey):
 
-    nonce             = ctInput[:64]
-    ciphertext        = ctInput[64:-16]
-    mac               = ctInput[-16:]
+    nonce      = ctInput[:64]
+    ciphertext = ctInput[64:-16]
+    mac        = ctInput[-16:]
 
-    AESkey            = binascii.unhexlify(hexKey)
-    cipher            = AES.new(AESkey, AES.MODE_GCM, nonce)
+    AESkey     = binascii.unhexlify(hexKey)
+    cipher     = AES.new(AESkey, AES.MODE_GCM, nonce)
     cipher.update('')
 
-    plaintext         = cipher.decrypt(ciphertext)
-
-    if debugging:
-        print 'M(encrypt): Using following parameters:'
-        print '  Nonce   (len =  ' + str(len(nonce) * 8) + ' bits): "' + nonce + '"'
-        print '  AES-key (len = '  + str(len(key)   * 8) + ' bits): "' + key   + '"'
-        print '  Plaintext: "'     + plaintext                                 + '"'
+    plaintext  = cipher.decrypt(ciphertext)
 
     try:
         cipher.verify(mac)
         return plaintext
+
     except ValueError:
-        print "WARNING! MAC verification failed! This might mean someone is tampering your messages!\n"
+        os.system('clear')
+        print "\nWARNING! MAC verification failed! This might mean someone is tampering your messages!\n"
         return None
+
     except TypeError:
-        print "WARNING! MAC verification failed! This might mean someone is tampering your messages!\n"
+        os.system('clear')
+        print "\nWARNING! MAC verification failed! This might mean someone is tampering your messages!\n"
         return None
 
-######################################################################
-#                      DIFFIE-HELLMAN KEY EXCHANGE                   #
-######################################################################
-
-class DiffieHellman(object):
-
-    prime       = 0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AAAC42DAD33170D04507A33A85521ABDF1CBA64ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6BF12FFA06D98A0864D87602733EC86A64521F2B18177B200CBBE117577A615D6C770988C0BAD946E208E24FA074E5AB3143DB5BFCE0FD108E4B82D120A92108011A723C12A787E6D788719A10BDBA5B2699C327186AF4E23C1A946834B6150BDA2583E9CA2AD44CE8DBBBC2DB04DE8EF92E8EFC141FBECAA6287C59474E6BC05D99B2964FA090C3A2233BA186515BE7ED1F612970CEE2D7AFB81BDD762170481CD0069127D5B05AA993B4EA988D8FDDC186FFB7DC90A6C08F4DF435C93402849236C3FAB4D27C7026C1D4DCB2602646DEC9751E763DBA37BDF8FF9406AD9E530EE5DB382F413001AEB06A53ED9027D831179727B0865A8918DA3EDBEBCF9B14ED44CE6CBACED4BB1BDB7F1447E6CC254B332051512BD7AF426FB8F401378CD2BF5983CA01C64B92ECF032EA15D1721D03F482D7CE6E74FEF6D55E702F46980C82B5A84031900B1C9E59E7C97FBEC7E8F323A97A7E36CC88BE0F1D45B7FF585AC54BD407B22B4154AACC8F6D7EBF48E1D814CC5ED20F8037E0A79715EEF29BE32806A1D58BB7C5DA76F550AA3D8A1FBFF0EB19CCB1A313D55CDA56C9EC2EF29632387FE8D76E3C0468043E8F663F4860EE12BF2D5B0B7474D6E694F91E6DCC4024FFFFFFFFFFFFFFFF
-    generator   = 2
-
-    def __init__(self, privateKey):
-        self.privateKey = privateKey
-        self.publicKey  = ""
-
-
-
-    def checkPublicKey(self, otherKey):
-        if (otherKey > 2 and otherKey < self.prime - 1):
-
-            if(pow(otherKey, (self.prime - 1)/2, self.prime) == 1):
-                return True
-        return False
-
-
-
-    def genSecret(self, privateKey, otherKey):
-        if(self.checkPublicKey(otherKey) == True):
-            sharedSecret = pow(otherKey, privateKey, self.prime)
-            return sharedSecret
-        else:
-            raise Exception("Invalid public key.")
-
-
-
-    def genKey(self, otherKey):
-        self.sharedSecret = self.genSecret(self.privateKey, otherKey)
-        s = hashlib.sha256()
-        s.update(str(self.sharedSecret))
-        self.key = s.digest()
-
-
-
-    def getKey(self):
-        return self.key
-
-
-def dhe_process(xmpp):
-
-    # Load local public DH key
-    with open('dhe_me_' + xmpp[3:], 'r') as rFile:
-        mePubKey = rFile.readline()
-
-    # Load contact's public DH key
-    with open('dhe_rx_' + xmpp[3:], 'r') as rFile:
-        publicKey = rFile.readline()
-
-    # Shred public DH key tmp storage
-    subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u dhe_me_' + xmpp[3:], shell=True).wait()
-    subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u dhe_rx_' + xmpp[3:], shell=True).wait()
-
-    os.system('clear')
-    print '\nDiffie-Hellman key-exchange with contact ' + xmpp[3:] + ' initiated. Please follow the instructions'
-
-    # User entry of private DH key
-    c = 1
-    sKey = ""
-    while (c < 19):
-        block = raw_input('\n1. Enter private key block '+ str(c) +': ')
-
-        keyOfBlock   = block[:-3]
-        crcFromBlock = block[-3:]
-        crcOfBlock   = crc32(keyOfBlock)
-        crcOfBlock   = crcOfBlock[-3:]
-
-        while (crcFromBlock != crcOfBlock):
-            block = raw_input('Typing error\n\n1. Enter private key block '+ str(c) +': ')
-
-            keyOfBlock   = block[:-3]
-            crcFromBlock = block[-3:]
-            crcOfBlock   = crc32(keyOfBlock)
-            crcOfBlock   = crcOfBlock[-3:]
-
-        sKey = sKey + keyOfBlock
-        c += 1
-
-
-    # Generate shared secret key
-    a   = DiffieHellman(int(sKey))
-    a.genKey(int(publicKey))
-    ssk = str(binascii.hexlify(a.key))
-
-    os.system('clear')
-    print     '\n3. Shared Secret Key for  TxM: ' + ssk
-    print     '\n4. CRC32 of Shared Secret Key: ' + crc32(ssk)
-    raw_input('\nPress enter when ready')
-
-    # Input secret to salt hash of DH shared secret key
-    os.system('clear')
-    print '5. Since we are assuming adversary is already in control of all deterministic keys\ncurrently in use, hash of public key needs to be verified manually. Call your contact\nand on the phone, agree on a secret that is hard for adversary to guess.'
-    print '\n                         DO NOT SAY THE SECRET ALOUD!'
-
-    salt     = raw_input('\n6. Enter the secret, that was agreed on: ')
-    pKeyHash = keccakVarLen(salt + ssk)
-    hashSpc  = ' '.join(pKeyHash[i:i+8] for i in xrange(0,len(pKeyHash),8))
-
-    print '\n7. Read the following hash taking turns on each block.'
-    print '\n   ' + hashSpc
-
-    # Generate session keys to decrypt outgoing and incoming messages
-    ssk2 = keccakVarLen(ssk + publicKey[:20])
-    ssk3 = keccakVarLen(ssk + mePubKey[:20])
-
-    success = ""
-    while (success != 'VERIFIED') and (success != 'MISMATCH'):
-        success = raw_input('\nIf the hash was a match, type  \'VERIFIED\' , else type \'MISMATCH\': ')
-    if (success == 'MISMATCH'):
-        os.system('clear')
-        print 'DHE aborted. Continuing with old keys'
-        pass
-    if (success == 'VERIFIED'):
-        DH_Write_Key(xmpp, ssk2, ssk3)
-        os.system('clear')
-        print 'DHE finished succesfully'
-
-def dhe_write_me(xmpp, key):
-    with open('dhe_me_' + xmpp[3:], 'w+') as iFile:
-        iFile.write(key[10:])
-
-def dhe_write_rx(xmpp, key):
-    with open('dhe_rx_' + xmpp[3:], 'w+') as iFile:
-        iFile.write(key[10:])
-
-def DH_Write_Key(xmpp, ssk2, ssk3):
-
-    with open('rx.' + xmpp[3:] + '.e', 'r') as efile:
-        keys1 = efile.readlines()
-
-    keys1[3] = ssk2
-    with open('rx.' + xmpp[3:] + '.e', 'w+') as efile:
-        for key in keys1:
-            efile.write(key)
-
-
-    with open('me.' + xmpp[3:] + '.e', 'r') as efile:
-        keys2 = efile.readlines()
-
-    keys2[3] = ssk3
-    with open('me.' + xmpp[3:] + '.e', 'w+') as efile:
-        for key in keys2:
-            efile.write(key)
-
 
 
 ######################################################################
-#                        KEY MANAGEMENT FUNCTIONS                    #
+#                    DECRYPTION AND KEY MANAGEMENT                   #
 ######################################################################
 
-def store_keyID(xmpp, keyID):
-    contacts = []
-    with open('rxc.tfc', 'r') as cFile:
-        datareader = csv.reader(cFile)
-        for row in datareader:
-            contacts.append(row)
+def get_keyset(xmpp, output=True):
+    try:
+        keySet = []
 
-    for i in range( len(contacts) ):
-        if contacts[i][1] == xmpp:
-           contacts[i][2] = keyID
+        with open(xmpp + '.e', 'r') as file:
+            keyFile = file.readlines()
 
-    with open('rxc.tfc', 'w') as cFile:
-        writer = csv.writer(cFile)
-        writer.writerows(contacts)
+        for line in keyFile:
+            key = line.strip('\n')
 
-    if debugging:
-        print '\nM(store_keyID): Wrote line \'' + str(keyID) + '\' for contact ' + xmpp + ' to txc.tfc\n'
+            # Verify keys in keyfile have proper hex-format.
+            validChars = ['0','1','2','3','4','5','6','7','8','9','A',
+                          'B','C','D','E','F','a','b','c','d','e','f']
 
+            for char in key:
+                if not char in validChars:
+                    print '\nCRITICAL ERROR! Illegal char \'' + str(char) + '\' in keyfile\n' + xmpp + '.e. Exiting.\n'
+                    exit()
 
+            # Verify keys are of proper length.
+            if len(key) != 64:
+                print '\nCRITICAL ERROR! Illegal length key in keyfile\n' + xmpp + '.e. Exiting.\n'
+                exit()
+            else:
+                keySet.append(key)
 
-def get_keyID(xmpp):
-    contacts = []
-    with open('rxc.tfc', 'r') as cFile:
-        csvData = csv.reader(cFile)
-        for row in csvData:
-            contacts.append(row)
+        # Verify that four keys were loaded.
+        if len(keySet) != 4:
+            print '\nCRITICAL ERROR! Keyfile ' + xmpp + '.e\nhas illegal number of keys. Exiting.\n'
+            exit()
 
-    for i in range( len(contacts) ):
-        if contacts[i][1] == xmpp:
-            keyID = int(contacts[i][2])
-            return keyID
+        # Verify that all keys are unique.
+        if any(keySet.count(key) > 1 for key in keySet):
+            print '\nCRITICAL ERROR! Two identical keys in keyfile\n' + xmpp + '.e. Exiting.\n'
+            exit()
 
-    print 'ERROR: Failed to load keyID for XMPP ' + xmpp + '. Exiting'
-    exit()
+        if debugging and output:
+            print '\nM(get_keyset): Loaded following set of keys for XMPP' + xmpp + '\n'
+            for key in keySet:
+                print key
 
+        return keySet
 
-
-def get_xmpp_keyset(xmpp):
-    with open(xmpp + '.e') as efile:
-        keyFile = efile.readlines()
-    keys = []
-
-    for key in keyFile:
-        key = key.strip('\n')
-        keys.append(key)
-
-    if (len(keys) < 4):
-        print 'Warning! Failed to load 4 keys from keyfile ' + xmpp + '.e. Exiting!'
+    except IOError:
+        print '\nCRITICAL ERROR! Failed to open keyfile for XMPP\n' + xmpp + '. Exiting.\n'
         exit()
-
-    if debugging:
-        print 'M(get_xmpp_keyset):\nLoaded following set of key for xmpp ' + xmpp
-        for item in keys:
-            print item
-
-    return keys
-
-
-
-def get_local_keyset():
-    return get_xmpp_keyset('tx.local')
 
 
 
 def rotate_keyset(xmpp, keySet):
-    with open(xmpp + '.e', 'w+') as efile:
-        for key in keySet:
-            nKey = keccak256(key)
-            efile.write(nKey + '\n')
+    try:
+
+        newKeys = []
+        with open(xmpp + '.e', 'w+') as file:
+            for key in keySet:
+                newKey = keccak_256(key)
+                newKeys.append(newKey)
+                file.write(newKey + '\n')
+
+        if debugging:
+            print '\nM(rotate_keys): Wrote following keys for contact ' + xmpp + '\n'
+            for key in newKeys:
+                print key
+
+        # Verify that keys were successfully written.
+        storedKeySet = get_keyset(xmpp, False)
+
+        if newKeys != storedKeySet:
+            print '\nCRITICAL ERROR! Next keyset was not properly stored. Exiting.\n'
+            exit()
+        else:
+            if debugging:
+                print '\nM(rotate_keys): Key overwriting successful.\n'
+
+    except IOError:
+        print '\nCRITICAL ERROR! Keyfile ' + xmpp + '.e\ncould not be loaded. Exiting.\n'
+        exit()
 
 
 
 def decrypt(xmpp, ct4, keyID):
 
+    # Load expected keyset.
+    keySet       = get_keyset(xmpp)
+
+    # Calculate offset of contact's keyset.
     storedKeyID  = int(get_keyID(xmpp))
     contactKeyID = int(keyID)
-    keyAdv       = contactKeyID - storedKeyID
-    keySet       = get_xmpp_keyset(xmpp)
+    offset       = contactKeyID - storedKeyID
 
-    if (keyAdv > 0):
-        if (xmpp == 'rx.local'):
-            print '\nATTENTION! It appears the last ' + str(keyAdv) + ' commands have not been received from TxM.\n'
+
+    if offset > 0:
+
+        # Notify user about missing messages implicated by the offset.
+        if xmpp == 'rx.local':
+            print '\nATTENTION! The last ' + str(offset) + ' commands\nhave not been received from TxM.\n'
+        elif xmpp.startswith('me.'):
+            print '\nATTENTION! The last ' + str(offset) + ' messages sent to contact\n' + xmpp[3:] + ' have not been received from TxM.\n'
         else:
-            print '\nATTENTION! It appears the last ' + str(keyAdv) + ' messages have not been received from ' + xmpp[3:] + '.\n'
+            print '\nATTENTION! The last ' + str(offset) + ' messages have not\nbeen received from ' + xmpp[3:] + '.\n'
 
-
-    # Iterate keyset through keccak until it matches contact's keyset iteration number
-    i = 0
-    if (i < keyAdv):
-        while (i < keyAdv):
+        # Iterate keyset through Keccak hash function until there is no offset.
+        i = 0
+        while i < offset:
             n = 0
-            while (n < 4):
-                keySet[n] = keccak256(keySet[n])
+            while n < 4:
+                keySet[n] = keccak_256(keySet[n])
                 n += 1
             i+=1
 
+    # Decrypt ciphertext.
     ct3 = AES_GCM_decrypt  (ct4, keySet[3])
     ct2 = twofish_decrypt  (ct3, keySet[2])
     ct1 = salsa_20_decrypt (ct2, keySet[1])
     pt  = keccak_decrypt   (ct1, keySet[0])
 
-    # Store next keyset
+    # Store next keyset.
     rotate_keyset(xmpp, keySet)
 
-    # Store keyID
-    store_keyID(xmpp, contactKeyID + 1)
+    # Store keyID.
+    write_keyID(xmpp, contactKeyID + 1)
 
     return pt
 
 
 
 ######################################################################
-#                             SETTERS                                #
+#                        rxc.tfc MANAGEMENT                          #
 ######################################################################
 
-def addContact(nick, xmpp):
-    contacts = []
-    with open('rxc.tfc', 'a+') as cFile:
-        datareader = csv.reader(cFile)
-        for row in datareader:
-            contacts.append(row)
-        cFile.write(nick + ',' + xmpp + ',1\n')
-    if debugging:
-        print '\nM(add_contact):\nAdded contact ' + nick + ' (xmpp = ' + xmpp + ') to txc.tfc\n'
+def add_contact(nick, xmpp):
+    try:
+        with open('rxc.tfc', 'a+') as file:
+                file.write(nick + ',' + xmpp + ',1\n')
 
+        if debugging:
+            print '\nM(add_contact): Added contact ' + nick + ' (xmpp = ' + xmpp + ') to rxc.tfc\n'
 
-
-def search_new_contacts():
-    contacts    = []
-    datareader  = csv.reader(open('rxc.tfc', 'a+'))
-    for row in datareader:
-        contacts.append(row)
-
-    for item in entropyfilenames:
-        onList  = False
-        xmpp    = item[:-2]
-
-        for person in contacts:
-            if xmpp in person[1]:
-                onList = True
-        if not onList:
-
-            if (xmpp == 'tx.local'):
-                continue
-
-            if (xmpp == 'rx.local'):
-                addContact('rx.local', 'rx.local')
-                continue
-
-            if xmpp.startswith('me.'):
-                localNick = xmpp.split('@')[0][3:]
-                addContact('me.' + localNick, xmpp)
-                continue
-
-            if xmpp.startswith('rx.'):
-                newNick = raw_input('New contact ' + xmpp + ' found. Enter nickname: ')
-                addContact(newNick, xmpp)
+    except IOError:
+        print '\nERROR! rxc.tfc could not be loaded. Exiting.\n'
+        exit()
 
 
 
 def write_nick(xmpp, nick):
-    contacts = []
-    with open ('rxc.tfc', 'r') as cFile:
-        datareader = csv.reader(cFile)
+    try:
+        contacts = []
 
-        for row in datareader:
-            contacts.append(row)
+        with open ('rxc.tfc', 'r') as file:
+            csvData = csv.reader(file)
+
+            for row in csvData:
+                contacts.append(row)
+
+        nickChanged = False
+
         for i in range( len(contacts) ):
-            if  contacts[i][1] == xmpp:
+            if contacts[i][1] == xmpp:
                 contacts[i][0] = nick
+                nickChanged = True
 
-    with open('rxc.tfc', 'w') as cFile:
-        writer = csv.writer(cFile)
-        writer.writerows(contacts)
+        if not nickChanged:
+            print '\nERROR! Could not find XMPP\n' + xmpp + ' from rxc.tfc. Exiting.\n'
+            exit()
 
-    if debugging:
-        print '\nM(write_nick):\nWrote nick = ' + nick + ' for contact ' + xmpp + ' to rxc.tfc\n'
+        with open('rxc.tfc', 'w') as file:
+            writer = csv.writer(file)
+            writer.writerows(contacts)
+
+        if debugging:
+            print '\nM(write_nick):\nWrote nick ' + nick + ' for account ' + xmpp + ' to rxc.tfc\n'
+
+    except IOError:
+        print '\nERROR! rxc.tfc could not be loaded. Exiting.\n'
+        exit()
 
 
 
-def writeLog(nick, xmpp, message):
-    message = message.strip('\n')
+def get_nick(xmpp):
+    try:
+        contacts = []
 
-    with open('logs.' + xmpp + '.tfc', 'a+') as lFile:
-        lFile.write(datetime.datetime.now().strftime(timeStampFmt) + ' ' + nick + ': ' + message + '\n')
+        with open('rxc.tfc', 'r') as file:
+            csvData = csv.reader(file)
 
-    if debugging:
-        print '\nM(writeLog):\nAdded log entry \'' + message + '\' for contact ' + xmpp + ' (nick=' + nick + ')\n'
+            for row in csvData:
+                contacts.append(row)
+
+        for i in range( len(contacts) ):
+            if contacts[i][1] == xmpp:
+                nick = contacts[i][0]
+                return nick
+
+        os.system('clear')
+        print '\nERROR! Failed to load nick for contact. Exiting.\n'
+        exit()
+
+    except IOError:
+        print '\nERROR! rxc.tfc could not be loaded. Exiting.\n'
+        exit()
+
+
+
+def write_keyID(xmpp, keyID):
+    try:
+        contacts = []
+
+        with open('rxc.tfc', 'r') as file:
+            csvData = csv.reader(file)
+
+            for row in csvData:
+                contacts.append(row)
+
+        keyIDChanged = False
+
+        for i in range(len(contacts) ):
+            if contacts[i][1] == xmpp:
+                contacts[i][2] = keyID
+                keyIDChanged   = True
+
+        if not keyIDChanged:
+            print '\nERROR! Could not find XMPP\n' + xmpp + ' from rxc.tfc. Exiting.\n'
+            exit()
+
+        with open('rxc.tfc', 'w') as file:
+            writer = csv.writer(file)
+            writer.writerows(contacts)
+
+        # Verify keyID has been properly written.
+        newStoredKey = get_keyID(xmpp)
+        if keyID != newStoredKey:
+            print '\nCRITICAL ERROR! KeyID was not properly stored. Exiting.\n'
+            exit()
+
+        if debugging:
+            print '\nM(write_keyID): Wrote line \'' + str(keyID) + '\' for contact ' + xmpp + ' to rxc.tfc\n'
+
+    except IOError:
+        print '\nERROR! rxc.tfc could not be loaded. Exiting.\n'
+        exit()
+
+
+
+def get_keyID(xmpp):
+    try:
+        contacts = []
+
+        with open('rxc.tfc', 'r') as file:
+            csvData = csv.reader(file)
+
+            for row in csvData:
+                contacts.append(row)
+
+        for i in range( len(contacts) ):
+            if contacts[i][1] == xmpp:
+                keyID = int(contacts[i][2])
+
+        # Verify keyID is positive.
+        if keyID > 0:
+            return keyID
+        else:
+            print '\nERROR! Failed to load valid keyID for XMPP\n' + xmpp + '. Exiting.\n'
+            exit()
+
+    except ValueError:
+        print '\nERROR! Failed to load valid keyID for XMPP\n' + xmpp + '. Exiting.\n'
+        exit()
+
+    except IOError:
+        print '\nERROR! rxc.tfc could not be loaded. Exiting.\n'
+        exit()
+
+
+
+def add_keyfiles(keyFileNames):
+    try:
+        contacts = []
+
+        with open('rxc.tfc', 'a+') as file:
+            csvData = csv.reader(file)
+
+            for row in csvData:
+                contacts.append(row)
+
+        for fileName in keyFileNames:
+            onList = False
+            xmpp   = fileName[:-2]
+
+            for user in contacts:
+                if xmpp in user[1]:
+                    onList = True
+
+            if not onList:
+
+                if xmpp == 'tx.local':
+                    continue
+
+                if xmpp == 'rx.local':
+                    add_contact('rx.local', 'rx.local')
+                    continue
+
+                if xmpp.startswith('me.'):
+                    localNick = xmpp.split('@')[0][3:]
+                    add_contact('me.' + localNick, xmpp)
+                    continue
+
+                if xmpp.startswith('rx.'):
+                    os.system('clear')
+                    print 'TFC ' + version + ' || Rx.py\n'
+                    newNick = raw_input('New contact ' + xmpp[3:] + ' found. Enter nick: ')
+                    add_contact(newNick, xmpp)
+
+    except IOError:
+        print '\nERROR! rxc.tfc could not be loaded. Exiting.\n'
+        exit()
 
 
 
@@ -1229,60 +1235,55 @@ def writeLog(nick, xmpp, message):
 #                             GETTERS                                #
 ######################################################################
 
-def get_nick(xmpp):
-    contacts = []
-    with open('rxc.tfc', 'r') as cFile:
-        csvData = csv.reader(cFile)
-        for row in csvData:
-            contacts.append(row)
-        for i in range( len(contacts) ):
-            if contacts[i][1] == xmpp:
-                nick = contacts[i][0]
-        if debugging:
-            print '\nM(get_nick): Loaded nick ' + nick + ' for contact ' + xmpp + '\n'
-        return nick
+def get_keyfile_list():
+    keyFileList = []
+
+    for file in os.listdir('.'):
+        if file.endswith('.e') and not file.startswith('tx.'):
+            keyFileList.append(file)
+    return keyFileList
 
 
 
-def get_entropy_file_list():
-    entropyfilenames = []
-    for item in os.listdir('.'):
-        if item.endswith('.e'):
-            if not item.startswith('tx.'):
-                entropyfilenames.append(item)
-    return entropyfilenames
+######################################################################
+#                        CHECKS AND WARNINGS                         #
+######################################################################
 
-
-
-def search_contact_keyfiles():
+def keyfiles_exist():
     keyfiles  = []
     keyfiles += [each for each in os.listdir('.') if each.endswith('.e')]
     if not keyfiles:
-        print '\nError: No keyfiles for contacts were found. Make sure they are in same directory as Rx.py\n'
+        os.system('clear')
+        print '\nError: No keyfiles for contacts were found.\n' \
+              'Make sure they are in same directory as Rx.py\n'
         exit()
 
 
 
-######################################################################
-#                            WARNINGS                                #
-######################################################################
+def file_exists(keyfile):
+    if os.path.isfile(keyfile):
+        return True
+    else:
+        return False
 
-def opsecWarning():
+
+
+def disp_opsec_warning():
     print '''
 REMEMBER! DO NOT MOVE RECEIVED FILES FROM RxM TO LESS SECURE
 ENVIRONMENTS INCLUDING UNENCRYPTED SYSTEMS, ONES IN PUBLIC USE,
 OR TO ANY SYSTEM THAT HAS NETWORK-CAPABILITY, OR THAT MOVES
-FILES TO COMPUTER WITH NETWORK CAPABILITY.
+FILES TO A COMPUTER WITH NETWORK CAPABILITY.
 
 DOING SO WILL RENDER DATA-DIODE PROTECTION USELESS, AS MALWARE
 \'STUCK IN RXM\' CAN EASILY EXFILTRATE KEYS AND/OR PLAINTEXT
 THROUGH THIS RETURN CHANNEL!
 
-IF YOU NEED TO RETRANSFER A DOCUMENT, EITHER READ IT FROM RXM SCREEN
-USING OPTICAL-CHARACTER RECOGNITION (OCR) SOFTWARE RUNNING ON TXM,
+IF YOU NEED TO RETRANSFER A DOCUMENT, EITHER READ IT FROM RxM SCREEN
+USING OPTICAL CHARACTER RECOGNITION (OCR) SOFTWARE RUNNING ON TxM,
 OR USE A PRINTER TO EXPORT THE DOCUMENT, AND A SCANNER TO READ IT TO
-TXM FOR ENCRYPTED RETRANSFER. REMEMBER TO DESTROY THE PRINTS, AND IF
-YOUR LIFE DEPENDS ON IT, THE PRINTER AND SCANNER ASWELL.\n'''
+TxM FOR ENCRYPTED RE-TRANSFER. REMEMBER TO DESTROY THE PRINTS, AND IF
+YOUR LIFE DEPENDS ON IT, THE PRINTER AND SCANNER AS WELL.\n'''
 
 
 
@@ -1290,21 +1291,28 @@ YOUR LIFE DEPENDS ON IT, THE PRINTER AND SCANNER ASWELL.\n'''
 #                         MSG PROCESSING                             #
 ######################################################################
 
-def b64d(content):
+def base64_decode(content):
+    import base64
     return base64.b64decode(content)
 
 
 
 def crc32(content):
+    import zlib
     return str(hex(zlib.crc32(content)))
 
 
 
+def depadding(string):
+    return string[:-ord(string[-1:])]
+
+
+
 ######################################################################
-#                           LOCAL TESTING                            #
+#                         MESSAGE RECEPTION                          #
 ######################################################################
 
-def clearLocalMsg():
+def clear_msg_file():
     if localTesting:
         if injectionTesting:
             open('INoutput', 'w+').close()
@@ -1312,22 +1320,40 @@ def clearLocalMsg():
 
 
 
-def loadMsg():
+def load_message_from_file():
     if injectionTesting:
-        with open('INoutput', 'r') as mFile:
-            loadMsg = mFile.readline()
-            if debugging:
-                if not (loadMsg==''):
-                    print '\n\nM(loadMSG): Loaded following message \n' + loadMsg
-        return loadMsg
+        with open('INoutput', 'r') as file:
+            message = file.readline()
+
+        if debugging and message != '':
+            print '\n\nM(load_message_from_file): Loaded following message \n' + message + '\n'
+
+        return message
 
     else:
-        with open('NHoutput', 'r') as mFile:
-                loadMsg = mFile.readline()
-                if debugging:
-                    if not (loadMsg==''):
-                        print '\n\nM(loadMSG): Loaded following message \n' + loadMsg
-        return loadMsg
+        with open('NHoutput', 'r') as file:
+            message = file.readline()
+
+        if debugging and message != '':
+            print '\n\nM(load_message_from_file): Loaded following message \n' + message + '\n'
+
+        return message
+
+
+
+######################################################################
+#                       COMMANDS AND FUNCTIONS                       #
+######################################################################
+
+def write_log_entry(nick, xmpp, message):
+
+    message = message.strip('\n')
+
+    with open('logs.' + xmpp + '.tfc', 'a+') as file:
+        file.write( datetime.datetime.now().strftime(logTimeStampFmt) + ' ' + nick + ': ' + message + '\n' )
+
+    if debugging:
+        print '\nM(write_log_entry): Added log entry \n\'' + message + '\' for contact ' + xmpp + '\n'
 
 
 
@@ -1335,26 +1361,34 @@ def loadMsg():
 #                             PRE LOOP                               #
 ######################################################################
 
+os.chdir(sys.path[0])
+
 longMsgComplete  = False
 fileReceive      = False
-dhe_me           = False
-dhe_rx           = False
 
-entropyfilenames = get_entropy_file_list()
+keyFileNames     = get_keyfile_list()
 longMsg          = {}
-longMessage      = ''
 
-search_new_contacts()
-search_contact_keyfiles()
-clearLocalMsg()
+add_keyfiles(keyFileNames)
+keyfiles_exist()
+clear_msg_file()
 
 os.system('clear')
-print 'Rx.py Running'
+header = 'TFC ' + version + ' || Rx.py '
+
+# Display configuration on header during start of program.
 
 if logMessages:
-    print 'Logging is currently enabled'
+    header += '|| Logging on '
 else:
-    print 'Logging is currently disabled'
+    header += '|| Logging off '
+
+if fileSavingAllowed:
+    header += '|| File reception on'
+else:
+    header += '|| File reception off'
+
+print header + '\n'
 
 
 
@@ -1365,322 +1399,353 @@ else:
 try:
     while True:
         sleep(0.01)
-        receivedpkg  = ''
-        fileReceived = False
+        receivedPacket = ''
+        fileReceived   = False
 
         if localTesting:
             try:
-                receivedpkg  = loadMsg()
-                if not receivedpkg.endswith('\n'):
+                receivedPacket = load_message_from_file()
+                if not receivedPacket.endswith('\n'):
                     continue
             except IOError:
                 continue
+
+            clear_msg_file()
+
         else:
-            receivedpkg      = port.readline()
+            receivedPacket = port.readline()
 
-        clearLocalMsg()
 
-        if not (receivedpkg == ''):
+        if not (receivedPacket == ''):
             try:
 
-                if receivedpkg.startswith('exitTFC'):
+                # Process unencrypted commands.
+                if receivedPacket.startswith('exitTFC'):
                     os.system('clear')
+                    print '\nExiting TFC\n'
                     exit()
                     continue
 
-                if receivedpkg.startswith('clearScreen'):
+                if receivedPacket.startswith('clearScreen'):
                     os.system('clear')
                     continue
 
 
 
-                ##############################################################
-                #                     CONTROL MESSAGE                        #
-                ##############################################################
-
-                if receivedpkg.startswith('<ctrl>'):
-                    cmdMACln, crcPkg = receivedpkg[6:].split('~')
+                ####################################
+                #         ENCRYPED COMMANDS        #
+                ####################################
+                if receivedPacket.startswith('<ctrl>'):
+                    cmdMACln, crcPkg = receivedPacket[6:].split('~')
                     crcPkg           = crcPkg.strip('\n')
-                    xmpp             = 'rx.local'
 
-                    # Check that CRC32 Matches
-                    if (crc32(cmdMACln) == crcPkg):
-                        payload, keyID     = cmdMACln.split('|')
-                        ciphertext         = b64d(payload)
+                    # Check that CRC32 Matches.
+                    if crc32(cmdMACln) == crcPkg:
+                        payload, keyID = cmdMACln.split('|')
+                        ciphertext     = base64_decode(payload)
 
 
-                        # Check that keyID is fresh
-                        storedKey = int(get_keyID('rx.local'))
-                        if (int(keyID) < storedKey):
-                            print + '\nWARNING! Expired key detected!\nIt is possible someone is trying to replay commands!\n'
+                        # Check that keyID is fresh.
+                        if int(keyID) < get_keyID('rx.local'):
+                            print '\nWARNING! Expired cmd key detected!\n'\
+                                  'This might indicate a replay attack!\n'
+
                             if logReplayedEvent:
-                                writeLog('', '', 'EVENT WARNING: Replayed command received!')
+                                write_log_entry('', '', 'AUTOMATIC LOG ENTRY: Replayed/malformed command received!')
+                            continue
+
+
+                        # Check that local keyfile for decryption exists.
+                        if not file_exists('rx.local.e'):
+                            print '\nError: rx.local.e was not found.\n'\
+                                  'Command could not be decrypted.\n'
                             continue
 
 
                         try:
-                            # Decrypt command if MAC verification succeeds
-                            decryptedMsg         = decrypt(xmpp, ciphertext, keyID)
+                            # Decrypt command if MAC verification succeeds.
+                            paddedCommand = decrypt('rx.local', ciphertext, keyID)
+
                         except ValueError:
                                 if logTamperingEvent:
-                                    writeLog('','', 'EVENT WARNING: Tampered/malformed command received!')
+                                    write_log_entry('','', 'AUTOMATIC LOG ENTRY: Tampered/malformed command received!')
                                 continue
                         except TypeError:
                                 if logTamperingEvent:
-                                    writeLog('','', 'EVENT WARNING: Tampered/malformed command received!')
+                                    write_log_entry('','', 'AUTOMATIC LOG ENTRY: Tampered/malformed command received!')
                                 continue
 
+                        # Remove padding.
+                        command = depadding(paddedCommand)
 
-                        # Remove padding
-                        while decryptedMsg.endswith(' '):
-                            decryptedMsg     = decryptedMsg[:-1]
 
-                        ##################
-                        # Enable logging #
-                        ##################
-                        if decryptedMsg.startswith('logson'):
-                            if remoteLogChangeAllowed:
+                        ##########################
+                        #     Enable logging     #
+                        ##########################
+                        if command == 'logson':
+                            if logChangeAllowed:
                                 if logMessages:
-                                    print 'Logging is already enabled'
+                                    print 'Logging is already enabled.'
                                 else:
                                     logMessages = True
-                                    print 'Logging has been enabled'
+                                    print 'Logging has been enabled.'
                                 continue
+
                             else:
-                                print '\nLogging settings can not be altered: Boolean value \'remoteLogChangeAllowed\' is currently set to False in Rx.py'
+                                print '\nLogging settings can not be altered: Boolean\n'\
+                                      'value \'logChangeAllowed\' is set to False.\n'
                                 continue
 
 
-                        ###################
-                        # Disable logging #
-                        ###################
-                        if decryptedMsg.startswith('logsoff'):
-                            if remoteLogChangeAllowed:
+                        ###########################
+                        #     Disable logging     #
+                        ###########################
+                        if command == 'logsoff':
+                            if logChangeAllowed:
                                 if not logMessages:
-                                    print 'Logging is already disabled'
-                                    continue
+                                    print 'Logging is already disabled.'
                                 else:
                                     logMessages = False
-                                    print 'Logging has been disabled'
-                                    continue
-                            else:
-                                print '\nLogging settings can not be altered: Boolean value \'remoteLogChangeAllowed\' is currently set to False in Rx.py'
+                                    print 'Logging has been disabled.'
                                 continue
 
-                        ###############
-                        # Change nick #
-                        ###############
+                            else:
+                                print '\nLogging settings can not be altered: Boolean\n'\
+                                      'value \'logChangeAllowed\' is set to False.\n'
+                                continue
 
-                        xmpp, cmdWp    = decryptedMsg.split('/')
-                        cmd, parameter = cmdWp.split('=')
 
-                        if cmd.startswith('nick'):
+                        #######################
+                        #     Change nick     #
+                        #######################
+                        if 'nick=' in command:
 
-                            # Write and load nick
-                            xmpp       = 'r' + xmpp[1:]
+                            xmpp, cmdPar   = command.split('/')
+                            cmd, parameter = cmdPar.split('=')
+
+                            # Write and load nick.
                             write_nick(xmpp, parameter)
-                            rxNick     = get_nick(xmpp)
+                            rxNick = get_nick(xmpp)
+                            
                             print '\nChanged ' + xmpp[3:] + ' nick to \'' + rxNick + '\'\n'
                             continue
 
                     else:
-                        print '\nCRC checksum error: Command received by RxM was malformed.\nRequest the message again from your contact'
-                        print 'If this error is persistent, check the batteries of your RxM data diode.\n'
+                        os.system('clear')
+                        print '\nCRC checksum error: Command received by RxM\n' \
+                                 'was malformed. If this error is persistent\n,'\
+                                 'check the batteries of your RxM data diode.\n'
 
 
 
-                ##############################################################
-                #                     NORMAL MESSAGE                         #
-                ##############################################################
-                if receivedpkg.startswith('<mesg>'):
-                    xmpp, ctMACln, crcPkg = receivedpkg[6:].split('~')
+                ####################################
+                #         NORMAL MESSAGE           #
+                ####################################
+                if receivedPacket.startswith('<mesg>'):
+                    xmpp, ctMACln, crcPkg = receivedPacket[6:].split('~')
                     crcPkg = crcPkg.strip('\n')
 
 
+                    # Check that CRC32 Matches.
+                    if crc32(ctMACln) == crcPkg:
+                        payload, keyID = ctMACln.split('|')
+                        ciphertext     = base64_decode(payload)
 
-                    # Check that CRC32 Matches
-                    if (crc32(ctMACln) == crcPkg):
-                        encodedMsgMAC, keyID = ctMACln.split('|')
-                        ciphertext           = b64d(encodedMsgMAC)
 
+                        # Check that keyID is fresh.
+                        if  int(keyID) < get_keyID(xmpp):
+                            print '\nWARNING! Expired msg key detected!\n'\
+                                  'This might indicate a replay attack!\n'
 
-                        # Check that keyID is fresh
-                        storedKey = int(get_keyID(xmpp))
-                        if  (int(keyID) < storedKey):
-                            print '\nWARNING! Expired key detected!\nIt is possible someone is trying to replay messages!\n'
                             if logReplayedEvent:
-                                writeLog('', xmpp, 'EVENT WARNING: Possibly replayed message received!')
+                                write_log_entry('', xmpp, 'AUTOMATIC LOG ENTRY: Replayed/malformed message received!')
+                            continue
+
+                        
+                        # Check that keyfile for decryption exists.
+                        if not file_exists(xmpp + '.e'):
+                            print '\nError: keyfile for contact ' + xmpp + 'was\n'\
+                                  'not found.\nMessage could not be decrypted.\n'
                             continue
 
 
                         try:
-                            # Decrypt message if MAC verification succeeds
-                            decryptedMsg     = decrypt(xmpp, ciphertext, keyID)
+                            # Decrypt message if MAC verification succeeds.
+                            decryptedMsg = decrypt(xmpp, ciphertext, keyID)
+
                         except ValueError:
                                 if logTamperingEvent:
-                                    writeLog('',xmpp, 'EVENT WARNING: Tampered/malformed message received!')
+                                    write_log_entry('',xmpp, 'AUTOMATIC LOG ENTRY: Tampered/malformed message received!')
                                 continue
+
                         except TypeError:
                                 if logTamperingEvent:
-                                    writeLog('',xmpp, 'EVENT WARNING: Tampered/malformed message received!')
+                                    write_log_entry('',xmpp, 'AUTOMATIC LOG ENTRY: Tampered/malformed message received!')
                                 continue
 
-                        # Remove whitespace around message
-                        while decryptedMsg.endswith(' '):
-                            decryptedMsg = decryptedMsg[:-1]
-                        while decryptedMsg.startswith(' '):
-                            decryptedMsg = decryptedMsg[1:]
-
+                        # Remove padding from message.
+                        decryptedMsg = depadding(decryptedMsg)
 
                         if decryptedMsg.startswith('s'):
 
-                            ###################################
-                            # Process short standard messages #
-                            ###################################
+                            ###########################################
+                            #     Process short standard messages     #
+                            ###########################################
 
                             if decryptedMsg.startswith('sTFCFILE'):
                                 if fileSavingAllowed:
-                                    print 'Receiving file, this make take a while. Notice that you can\'t\nreceive messages until you have received and named the file!'
                                     fileReceive  = True
                                     fileReceived = True
                             decryptedMsg = decryptedMsg[1:]
 
                         else:
 
-                            ############################################
-                            # Process long messages and file transfers #
-                            ############################################
+                            ####################################################
+                            #     Process long messages and file transfers     #
+                            ####################################################
 
-                            # Start packet of long message / file
+
+                            # Header packet of long message / file.
                             if decryptedMsg.startswith('l'):
                                 if decryptedMsg.startswith('lTFCFILE'):
+
                                     if fileSavingAllowed:
-                                        print 'Receiving file, this make take a while. Notice that you can\'t\nreceive messages until you have received and named the file'
+                                        print 'Receiving file, this make take a while. You can\'t\n'\
+                                              'receive messages until you have stored/rejected the file'
                                         fileReceive = True
                                 else:
                                     if showLongMsgWarning:
                                         print '\n' + 'Receiving long message, please wait...\n'
-                                longMsg[xmpp]    = decryptedMsg[1:]
+
+                                longMsg[xmpp] = decryptedMsg[1:]
                                 continue
 
 
-                            # Append packet of long message / file
+                            # Appended packet of long message / file.
                             if decryptedMsg.startswith('a'):
-                                longMsg[xmpp]    = longMsg[xmpp] + decryptedMsg[1:]
+                                longMsg[xmpp] = longMsg[xmpp] + decryptedMsg[1:]
                                 continue
 
 
-                            # End packet of long message / file
+                            # Final packet of long message / file.
                             if decryptedMsg.startswith('e'):
-                                longMsg[xmpp]    = longMsg[xmpp] + decryptedMsg[1:]
-                                decryptedMsg     = longMsg[xmpp] + '\n'
+                                longMsg[xmpp] = longMsg[xmpp] + decryptedMsg[1:]
+                                decryptedMsg  = longMsg[xmpp] + '\n'
                                 if fileReceive:
                                     fileReceived = True
 
 
                         if not fileReceive:
 
-                            ##############################
-                            # Process printable messages #
-                            ##############################
+                            ######################################
+                            #     Process printable messages     #
+                            ######################################
 
                             if xmpp.startswith('me.'):
-                                nick = 'Me > '   + get_nick('rx' + xmpp[2:])
+                                nick = 'Me > ' + get_nick('rx' + xmpp[2:])
                             else:
-                                nick = 5   * ' ' + get_nick(xmpp)
+                                nick = 5 * ' ' + get_nick(xmpp)
 
-                            ###############################
-                            # Diffie-hellman Key-exchange #
-                            ###############################
+                            # Print message to user.
+                            if displayTime:
+                                msgTime = datetime.datetime.now().strftime(displayTimeFmt)
+                                print msgTime + ' ' + nick + ':    ' + decryptedMsg
+                            else:
+                                print                 nick + ':    ' + decryptedMsg
 
-                            if decryptedMsg.startswith('DH_PUBKEY_'):
-                                if nick.startswith('Me > '):
-                                    dhe_write_me(xmpp, decryptedMsg)
-                                    dhe_me = True
-
-                                else:
-                                    dhe_write_rx(xmpp, decryptedMsg)
-                                    dhe_rx = True
-
-                                if  (dhe_rx and dhe_me):
-                                    dhe_me = False
-                                    dhe_rx = False
-                                    dhe_process(xmpp)
-                                    decryptedMsg = ''
-                                    continue
-
-                                else:
-                                    if dhe_me:
-                                        print 'Waiting for ' + xmpp[3:] + '\'s DHE public key'
-                                        continue
-                                    if dhe_rx:
-                                        print 'Your contact ' + xmpp[3:] + ' has initated DHE. Please select your contact and type command \'/dhe\''
-                                        continue
-
-                            # Print message to user
-                            print nick + ':    ' + decryptedMsg
-
-
-                            # Log messages if logging is enabled
+                            # Log messages if logging is enabled.
                             if logMessages:
                                 if nick.startswith('Me > '):
                                     spacing = len(get_nick('rx' + xmpp[2:]))
                                     nick    = (spacing - 2) * ' ' + 'Me'
-                                    writeLog(nick, xmpp[3:], decryptedMsg)
+                                    write_log_entry(nick, xmpp[3:], decryptedMsg)
                                 else:
-                                    writeLog(nick[5:], xmpp[3:], decryptedMsg)
+                                    write_log_entry(nick[5:], xmpp[3:], decryptedMsg)
 
 
                         if fileReceive:
 
-                            ##########################
-                            # Process received files #
-                            ##########################
+                            ##################################
+                            #     Process received files     #
+                            ##################################
 
                             if fileSavingAllowed:
                                 if fileReceived:
 
-                                    fName = raw_input('\nFile Received. Enter filename (\'r\' rejects file): ')
+                                    discardFile = False
+                                    askFileName = True
 
-                                    # File rejection option
-                                    if fName == 'r':
-                                        print '\nFile Rejected. Continuing\n'
-                                        decryptedMsg == ''
-                                        fileReceive  = False
-                                        fileReceived = False
-                                        continue
+                                    while askFileName:
+                                        os.system('clear')
+                                        fileName = raw_input('\nFile Received. Enter filename (\'r\' rejects file): ')
 
-                                    # Save received base64 data to tmp file and decode it to user-specified file. Shred tmp file. and show OPSEC warning.
-                                    else:
-                                        with open('TFCtmpFileRx', 'w+') as mFile:
-                                            mFile.write(decryptedMsg[7:])
-                                        subprocess.Popen('base64 -d TFCtmpFileRx > ' + fName, shell=True).wait()
-                                        subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u TFCtmpFileRx', shell=True).wait()
-                                        fileReceive  = False
-                                        fileReceived = False
+                                        
+                                        if fileName == 'r':
+                                            print '\nFile Rejected. Continuing\n'
+                                            decryptedMsg == ''
+                                            fileReceive  = False
+                                            fileReceived = False
+                                            discardFile  = True
+                                            askFileName  = False
+                                            continue
 
-                                        opsecWarning()
+
+                                        else:
+                                            if file_exists(fileName):
+                                                overwrite = raw_input('File already exists. Type \'YES\' to overwrite: ')
+
+                                                if overwrite == 'YES':
+                                                    askFileName = False
+                                                continue
+
+                                            else:
+                                                askFileName = False
+                                                continue
+
+                                    if not discardFile:
+
+                                        # Save received base64 data to temporary file and decode it.
+                                        with open('tfcTmpFile', 'w+') as file:
+                                            file.write(decryptedMsg[7:])
+
+                                        subprocess.Popen('base64 -d tfcTmpFile > ' + fileName,                    shell=True).wait()
+
+                                        # Shred temporary file.
+                                        subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u tfcTmpFile', shell=True).wait()
+
+                                        disp_opsec_warning()
+
+                                    fileReceive  = False
+                                    fileReceived = False
+
+
                                 else:
                                     continue
+
                             else:
                                 decryptedMsg == ''
                                 continue
+
                         continue
 
 
-
-
                     else:
-                        print '\nCRC checksum error: Message received by RxM was malformed.\n'
-                        print 'Note that this error occured between your NH and RxM so recipient most likely received the message.'
-                        print 'If this error is persistent, check the batteries of your RxM data diode.\n'
+                        print '\nCRC checksum error: Message received by RxM was malformed\n.'\
+                                'Note that this error occurred between your NH and RxM so\n'  \
+                                'recipient most likely received the message. If this error\n' \
+                                'is persistent, check the batteries of your RxM data diode.\n'
 
 
             except IndexError:
-                print 'WARNING! Received message/command wasn\'t correctly formatted. This might indicate someone is tampering messages!'
+                os.system('clear')
+                print '\nWARNING! Packet format is invalid!\n'\
+                        'This might indicate message tampering!\n'
                 continue
+
             except ValueError:
-                print 'WARNING! Received message/command wasn\'t correctly formatted. This might indicate someone is tampering messages!'
+                os.system('clear')
+                print '\nWARNING! Packet format is invalid!\n'\
+                        'This might indicate message tampering!\n'
                 continue
 
 except KeyboardInterrupt:

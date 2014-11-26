@@ -15,7 +15,6 @@ from time             import sleep
 
 
 
-
 ######################################################################
 #                             LICENCE                                #
 ######################################################################
@@ -114,7 +113,7 @@ class DBus_MsgReceiver():
 
         if msgContent.startswith('?TFC_'):
 
-            packetTime = datetime.datetime.now().strftime(displayTimeFmt)                        
+            packetTime = datetime.datetime.now().strftime(displayTimeFmt)
             print packetTime + '  Received message from ', xmpp
 
             if verbose:
@@ -234,8 +233,8 @@ def networkTransmitter():
                     serialQueue.put(rcdPkg + '\n')
 
                     os.system('clear')
-                    o    = DBus_MsgSender(xmpp)
-                    o.clearHistory()
+                    #o    = DBus_MsgSender(xmpp)
+                    #o.clearHistory()
 
 
                 # Relay command to RxM.
@@ -250,9 +249,9 @@ def networkTransmitter():
 
                         serialQueue.put('<ctrl>'                     + msgContent + '~' + crcCalc + '\n')
 
-                        packetTime = datetime.datetime.now().strftime(displayTimeFmt)                        
+                        packetTime = datetime.datetime.now().strftime(displayTimeFmt)
                         print packetTime + '  Sent command to RxM  '
-                        
+
                         if verbose:
                             print rcdPkg + '\n'
 
@@ -274,10 +273,10 @@ def networkTransmitter():
                             print 'NetworkTransmitter: Wrote <mesg>me.' + xmpp + '~' + msgContent + '~' + crcPkg + ' to serial queue.\n'
 
                         serialQueue.put('<mesg>me.'                     + xmpp + '~' + msgContent[5:] + '~' + crcPkg + '\n')
-                        o = DBus_MsgSender(xmpp)
-                        o.sender()
-                        
-                        packetTime = datetime.datetime.now().strftime(displayTimeFmt)                        
+                        #o = DBus_MsgSender(xmpp)
+                        #o.sender()
+
+                        packetTime = datetime.datetime.now().strftime(displayTimeFmt)
                         print packetTime + '  Sent message to        ' + xmpp
 
                         if verbose:
@@ -287,7 +286,6 @@ def networkTransmitter():
                         print '\nCRC checksum error: Message was not forwarded to RxM or recipient.'
                         print '\nPlease try sending the message again.'
                         print '\nIf this error is persistent, check the batteries of your TxM data diode.\n'
-
             clearLocalMsg()
 
         except OSError:

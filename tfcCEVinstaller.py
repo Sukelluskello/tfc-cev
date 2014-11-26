@@ -3,7 +3,6 @@
 
 import binascii
 import os
-import sys
 import subprocess
 import time
 
@@ -143,7 +142,7 @@ def zypper_Python_Qt4():
 
 
 ######################################################################
-#                             APT COMMANDS                           #
+#                             PIP COMMANDS                           #
 ######################################################################
 
 def pip_salsa20():
@@ -260,18 +259,18 @@ def get_TxM_scripts():
 
 def get_RxM_scripts():
     print '\nDownloading TFC-suite (RxM)\n'
-    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/Rx.py', shell=True).wait()
+    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/Rx.py',        shell=True).wait()
 
 
 
 def get_NH_script():
     print '\nDownloading TFC-suite (NH)\n'
-    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/NH.py', shell=True).wait()
+    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/NH.py',       shell=True).wait()
 
 
 
 ######################################################################
-#                             MISC COMMANDS                          #
+#                             MISC FUNCTIONS                         #
 ######################################################################
 
 def reboot():
@@ -285,7 +284,7 @@ def SetSerialPermissions(username):
 
 
 
-def compile_C_programs():
+def compile_c_programs():
     print '\nCompiling C-programs\n'
     subprocess.Popen('sudo gcc -Wall -O getEntropy.c -o getEntropy', shell=True).wait()
     subprocess.Popen('sudo gcc -Wall -O deskew.c -o deskew',         shell=True).wait()
@@ -317,7 +316,6 @@ def create_keyfile(name):
             key    = binascii.hexlify(binKey)
             eFile.write(key+'\n')
             i += 1
-
 
 
 ######################################################################
@@ -369,7 +367,7 @@ Select configuration that matches your OS:
     #                                  TxM                               #
     ######################################################################
 
-    # TxM Raspbian
+        # TxM Raspbian
         if selection == 1:
             os.system('clear')
             if raw_input('This will install TxM configuration for Raspbian. \nAre you sure? Type uppercase YES: ') == 'YES':
@@ -383,7 +381,7 @@ Select configuration that matches your OS:
                 pip_salsa20()
                 pip_twofish()
 
-                compile_C_programs()
+                compile_c_programs()
                 c_run_permissions()
 
                 install_Python_Serial()
@@ -391,6 +389,7 @@ Select configuration that matches your OS:
                 rasp_inittab()
 
                 os.system('clear')
+
                 print '\nTxM install script completed\n'                   \
                       'Rebooting system in 20 seconds.\n'                  \
                       'If you don\'t want to restart now, press CTRL+C\n\n'\
@@ -400,7 +399,8 @@ Select configuration that matches your OS:
                     time.sleep(20)
                     reboot()
                 except KeyboardInterrupt:
-                    print '\n\nReboot aborted, exiting. (You may need to restart Raspbian for Tx.py to work correctly)\n'
+                    print '\n\nReboot aborted, exiting. (You may need to ' \
+                          'restart Raspbian for Tx.py to work correctly)\n'
                     exit()
             else:
                 continue
@@ -421,7 +421,7 @@ Select configuration that matches your OS:
                 pip_salsa20()
                 pip_twofish()
 
-                compile_C_programs()
+                compile_c_programs()
                 c_run_permissions()
 
                 install_Python_Serial()
@@ -438,7 +438,8 @@ Select configuration that matches your OS:
                     time.sleep(20)
                     reboot()
                 except KeyboardInterrupt:
-                    print '\n\nReboot aborted, exiting. (You may need to restart your OS for Tx.py to work correctly)\n'
+                    print '\n\nReboot aborted, exiting. (You may need to ' \
+                          'restart your OS for Tx.py to work correctly)\n'
                     exit()
             else:
                 continue
@@ -477,7 +478,8 @@ Select configuration that matches your OS:
                     time.sleep(20)
                     reboot()
                 except KeyboardInterrupt:
-                    print '\n\nReboot aborted, exiting. (You may need to restart Raspbian for Rx.py to work correctly)\n'
+                    print '\n\nReboot aborted, exiting. (You may need to ' \
+                          'restart Raspbian for Rx.py to work correctly)\n'
                     exit()
             else:
                 continue
@@ -503,7 +505,6 @@ Select configuration that matches your OS:
                 SetSerialPermissions(raw_input('Type name of the user that will be running TFC (this will add the user to dialout group): '))
 
 
-
                 os.system('clear')
                 print '\nRxM install script completed\n'                   \
                       'Rebooting system in 20 seconds.\n'                  \
@@ -515,7 +516,8 @@ Select configuration that matches your OS:
                     reboot()
                 except KeyboardInterrupt:
 
-                    print '\n\nReboot aborted, exiting. (You may need to restart your OS for Rx.py to work correctly)\n'
+                    print '\n\nReboot aborted, exiting. (You may need to ' \
+                          'restart your OS for Rx.py to work correctly)\n'
                     exit()
             else:
                 continue
@@ -551,7 +553,8 @@ Select configuration that matches your OS:
                     time.sleep(20)
                     reboot()
                 except KeyboardInterrupt:
-                    print '\n\nReboot aborted, exiting. (You may need to restart your NH for NH.py to work correctly)\n'
+                    print '\n\nReboot aborted, exiting. (You may need to ' \
+                          'restart your NH for NH.py to work correctly)\n'
                     exit()
             else:
                 continue
@@ -597,7 +600,8 @@ Select configuration that matches your OS:
                     time.sleep(20)
                     reboot()
                 except KeyboardInterrupt:
-                    print '\n\nReboot aborted, exiting. (You may need to restart your NH for NH.py to work correctly)\n'
+                    print '\n\nReboot aborted, exiting. (You may need to ' \
+                          'restart your NH for NH.py to work correctly)\n'
                     exit()
             else:
                 continue
@@ -628,7 +632,8 @@ Select configuration that matches your OS:
                     time.sleep(20)
                     reboot()
                 except KeyboardInterrupt:
-                    print '\n\nReboot aborted, exiting. (You may need to restart your NH for NH.py to work correctly)\n'
+                    print '\n\nReboot aborted, exiting. (You may need to ' \
+                          'restart your NH for NH.py to work correctly)\n'
                     exit()
             else:
                 continue
@@ -638,6 +643,7 @@ Select configuration that matches your OS:
     # Insecure testing mode with standalone computers.
         if selection == 9:
             os.system('clear')
+
             printLocalTesterWarning()
             if raw_input('\nTO VERIFY THAT YOU UNDERSTAND RISKS,\nTYPE IN UPPERCASE \'INSECURE\': ') == 'INSECURE':
 
@@ -699,7 +705,7 @@ Select configuration that matches your OS:
                 print 'Done.'
 
                 for user1 in userArray:
-                    print 'Now creating keys for user: ' + user1
+                    print 'Creating keys for user: ' + user1
                     for user2 in userArray:
                         if user1 != user2:
                             create_keyfile('tx.' + user1 + '.e')
@@ -713,13 +719,13 @@ Select configuration that matches your OS:
                         continue
 
                 os.system('clear')
-                print 'Test folders named after each user generated succesfully. Before each user '         \
-                      'can run their test version of TFC, they must run the bundled tfcInstaller.py '       \
-                      'and choose installation configuration 9. When the installer has installed '          \
-                      'dependencies, the user is ready to run the Tx.py, Rx.py and NH.py. Note '            \
-                      'that other users don\'t have to create their own keyfiles for insecure testing.\n\n' \
-                      'The pycrypto-master folder in tfcInstaller.py directory is only needed if you are '  \
-                      'going to audit the pyCrypto AES-library.\n\n'
+                print 'Test folders named after each user generated succesfully. Before each user '        \
+                      'can run their test version of TFC, they must run the bundled tfcInstaller.py '      \
+                      'and choose installation configuration 9. When the installer has installed '         \
+                      'dependencies, the user is ready to run the Tx.py, Rx.py and NH.py. Note '           \
+                      'that other users don\'t have to create their own keyfiles for insecure testing.\n\n'\
+                      'The pycrypto-master folder in tfcCEVInstaller.py directory is only needed if '\
+                      'you are going to audit the pyCrypto AES-library.\n\n'
                 exit()
             else:
                 continue
@@ -728,6 +734,5 @@ Select configuration that matches your OS:
         continue
     except IndexError:
         continue
-
 
 

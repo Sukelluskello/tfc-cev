@@ -1628,9 +1628,9 @@ try:
                             # Print message to user.
                             if displayTime:
                                 msgTime = datetime.datetime.now().strftime(displayTimeFmt)
-                                print msgTime + ' ' + nick + ':    ' + plaintext
+                                print msgTime + '  ' + nick + ':  ' + plaintext
                             else:
-                                print                 nick + ':    ' + plaintext
+                                print                  nick + ':    ' + plaintext
 
                             # Log messages if logging is enabled.
                             if logMessages:

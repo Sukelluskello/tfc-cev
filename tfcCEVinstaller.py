@@ -300,7 +300,7 @@ def c_run_permissions():
 
 def printLocalTesterWarning():
     print '''
-WARNING YOU HAVE SELECTED THE LOCAL TESTING VERSION OF TFC!
+WARNING! YOU HAVE SELECTED THE LOCAL TESTING VERSION OF TFC!
 THIS VERSION IS INTENDED FOR TRYING OUT THE FEATURES AND STABILITY OF SYSTEM.
 AS IN THIS CONFIGURATION, THE ENCRYPTION KEYS ARE CREATED, STORED AND HANDLED
 ON NETWORK-CONNECTED COMPUTER, ANYONE WHO BREAKS IN TO YOUR COMPUTER BY
@@ -670,7 +670,7 @@ Select configuration that matches your OS:
                           'the XMPP-addresses that will be participating in testing, to generate '  \
                           'local test folders for each user. If you have already received a local ' \
                           'test folder, you can press enter to close the installer and open the '   \
-                          'Tx.py, Rx.py and NH.py in their own terminals. Remember to open pidgin ' \
+                          'Tx.py, Rx.py and NH.py in their own terminals. Remember to open Pidgin ' \
                           'before opening NH.py.\n\n'
 
                     userC = raw_input('Enter XMPP account of user, or press Enter to create test folders:\n\n')
@@ -686,16 +686,16 @@ Select configuration that matches your OS:
                     subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/Tx.py', shell=True).wait()
                     subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/Rx.py', shell=True).wait()
                     subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/NH.py', shell=True).wait()
-                    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/tfcCEVinstaller.py -O tfcInstaller.py', shell=True).wait()
+                    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/tfc-CEV-installer.py -O tfcInstaller.py', shell=True).wait()
 
                     changeToLocal('Tx.py')
                     changeToLocal('Rx.py')
                     changeToLocal('NH.py')
 
-                    subprocess.Popen('mv Tx.py '           + user1 + '/', shell=True).wait()
-                    subprocess.Popen('mv Rx.py '           + user1 + '/', shell=True).wait()
-                    subprocess.Popen('mv NH.py '           + user1 + '/', shell=True).wait()
-                    subprocess.Popen('mv tfcInstaller.py ' + user1 + '/', shell=True).wait()
+                    subprocess.Popen('mv Tx.py '                + user1 + '/', shell=True).wait()
+                    subprocess.Popen('mv Rx.py '                + user1 + '/', shell=True).wait()
+                    subprocess.Popen('mv NH.py '                + user1 + '/', shell=True).wait()
+                    subprocess.Popen('mv tfc-CEV-installer.py ' + user1 + '/', shell=True).wait()
 
                     create_keyfile('tx.local.e')
                     subprocess.Popen('cp tx.local.e rx.local.e', shell=True).wait()
@@ -720,7 +720,7 @@ Select configuration that matches your OS:
 
                 os.system('clear')
                 print 'Test folders named after each user generated succesfully. Before each user '        \
-                      'can run their test version of TFC, they must run the bundled tfcInstaller.py '      \
+                      'can run their test version of TFC, they must run the bundled tfc-CEV-Installer.py '      \
                       'and choose installation configuration 9. When the installer has installed '         \
                       'dependencies, the user is ready to run the Tx.py, Rx.py and NH.py. Note '           \
                       'that other users don\'t have to create their own keyfiles for insecure testing.\n\n'\

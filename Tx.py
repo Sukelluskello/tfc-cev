@@ -38,7 +38,7 @@ for more details. For a copy of the GNU General Public License, see
 
 
 ######################################################################
-#                           CONFIGURATION                            #
+#                            CONFIGURATION                           #
 ######################################################################
 
 PkgSize            = 140
@@ -149,9 +149,8 @@ class Keccak:
        [28,   55,    25,    21,    56]    ,
        [27,   20,    39,     8,    14]    ]
 
+
     ## Generic utility functions
-
-
 
     def rot(self,x,n):
         """Bitwise rotation (to the left) of n bits considering the \
@@ -264,10 +263,9 @@ class Keccak:
         output =''.join(output).upper()
         return output
 
+
+
     ### Padding function
-
-
-
     def pad(self,M, n):
         """Pad M with reverse-padding to reach a length multiple of n
 
@@ -748,7 +746,7 @@ def self_test():
 
         T = Twofish(k)
         if not T.encrypt(p) == c or not T.decrypt(c) == p:
-            raise ImportError('the Twofish library is corrupted')
+            exit_with_msg('CRITICAL ERROR! Twofish library is corrupted')
 
 # Perform Twofish library self-test.
 self_test()
@@ -791,7 +789,6 @@ def twofish_encrypt(plainText, HexKey):
             iv       = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ctr, nonce))
         else:
             exit_with_msg('CRITICAL ERROR! Twofish counter hash - nonce length mismatch.')
-
 
         # Initialize Twofish cipher with key.
         E           = Twofish(key)
@@ -1362,7 +1359,7 @@ def long_msg_process(userInput, xmpp):
             ctWithTag = encrypt(xmpp, paddedMsg)
 
             encoded   = b64e(ctWithTag)
-            checksum = crc32(encoded + '|' + str(keyID))
+            checksum  = crc32(encoded + '|' + str(keyID))
 
             write_keyID(xmpp, keyID + 1)
             output_message(xmpp, encoded, keyID, checksum)
@@ -1501,12 +1498,12 @@ def print_help():
             print   ' \'  \' (2x spacebar) '                                  + 'Emergency exit'
         else:
             print   ' /clear & \'  \''                             + 9  * ' ' + 'Clear screens'
+        print       ' /file <filename>'                            + 6  * ' ' + 'Send file to recipient'
         print       ' /help'                                       + 17 * ' ' + 'Display this list of commands'
         print       ' /logging <on/off>'                           + 5  * ' ' + 'Enable/disable logging on Rx.py'
         print       ' /msg <ID/xmpp/group>'                        + 2  * ' ' + 'Change recipient'
         print       ' /names'                                      + 16 * ' ' + 'Displays available contacts'
         print       ' /paste'                                      + 16 * ' ' + 'Enable paste-mode'
-        print       ' /file <filename>'                            + 6  * ' ' + 'Send file to recipient'
         print       ' /nick <nick>'                                + 10 * ' ' + 'Change contact\'s nickname on Tx.py & Rx.py'
         print       ' /quit & /exit'                               + 9  * ' ' + 'Exits TFC'
         print       ' /group'                                      + 16 * ' ' + 'List group members'
@@ -1903,7 +1900,6 @@ while True:
 
     # Create new group.
     if userInput.startswith('/group create '):
-
         userInput = ' '.join(userInput.split())
 
 
@@ -2116,7 +2112,7 @@ while True:
                         nick = get_nick(xmpp)
                         selectedGroup = ''
                         os.system('clear')
-                        print 'Now sending messages to ' + nick + ' (' + xmpp + ')\n'
+                        print 'Now sending messages to ' + nick + ' (' + xmpp[3:] + ')\n'
                         continue
 
             else:
@@ -2151,8 +2147,6 @@ while True:
 
     if userInput.startswith('/nick ') or userInput.startswith('/logging '):
         command    = ''
-        cmdLogging = False
-        cmdNick    = False
 
         # Check that local keyfile exists.
         if not os.path.isfile('tx.local.e'):
@@ -2190,7 +2184,7 @@ while True:
 
             os.system('clear')
             print '\nChanged ' + xmpp[3:] + ' nick to ' + nick + '\n'
-            command  = 'rx.' + xmpp[3:] + '/nick=' + nick
+            command = 'rx.' + xmpp[3:] + '/nick=' + nick
 
 
         ###################
@@ -2216,8 +2210,8 @@ while True:
         ########################
 
         cmd_msg_process(command)
-        continue
 
+        continue
 
     #############################
     #     FILE TRANSMISSION     #

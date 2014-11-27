@@ -154,9 +154,8 @@ class Keccak:
        [28,   55,    25,    21,    56]    ,
        [27,   20,    39,     8,    14]    ]
 
+
     ## Generic utility functions
-
-
 
     def rot(self,x,n):
         """Bitwise rotation (to the left) of n bits considering the \
@@ -269,10 +268,9 @@ class Keccak:
         output =''.join(output).upper()
         return output
 
+
+
     ### Padding function
-
-
-
     def pad(self,M, n):
         """Pad M with reverse-padding to reach a length multiple of n
 
@@ -461,7 +459,6 @@ def keccak_256(hashInput):
 
 
 
-
 def keccak_decrypt(ciphertext, HexKey):
 
     # CTR mode, no authentication.
@@ -489,11 +486,11 @@ def keccak_decrypt(ciphertext, HexKey):
         i         += 1
 
     # Convert key from hex format to binary.
-    keystreamBIN   = binascii.unhexlify(keystream)
+    keystreamBIN = binascii.unhexlify(keystream)
 
     # XOR keystream with plaintext to acquire ciphertext.
     if len(ciphertext) == len(keystreamBIN):
-        plaintext  = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ciphertext, keystreamBIN))
+        plaintext = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ciphertext, keystreamBIN))
     else:
         os.system('clear')
         print '\nCRITICAL ERROR! Keccak ciphertext - keystream length mismatch. Exiting.\n'
@@ -700,7 +697,7 @@ def _ensure_bytes(data):
 
 class Twofish():
     def __init__(self, key):
-        if not (len(key) > 0 and len(key) <= 32):
+        if not len(key) > 0 and len(key) <= 32:
             raise ValueError('invalid key length')
         _ensure_bytes(key)
 
@@ -755,7 +752,7 @@ def self_test():
 
         T = Twofish(k)
         if not T.encrypt(p) == c or not T.decrypt(c) == p:
-            raise ImportError('the Twofish library is corrupted')
+            exit_with_msg('CRITICAL ERROR! Twofish library is corrupted.')
 
 # Perform Twofish library self-test.
 self_test()
@@ -865,7 +862,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
 from Crypto.Cipher import AES
-
 
 try:
     import Crypto.Random.random
@@ -1583,7 +1579,6 @@ try:
                             #     Process long messages and file transfers     #
                             ####################################################
 
-
                             # Header packet of long message / file.
                             if plaintext.startswith('l'):
                                 if plaintext.startswith('lTFCFILE'):
@@ -1630,7 +1625,7 @@ try:
                                 msgTime = datetime.datetime.now().strftime(displayTimeFmt)
                                 print msgTime + '  ' + nick + ':  ' + plaintext
                             else:
-                                print                  nick + ':    ' + plaintext
+                                print                  nick + ':  ' + plaintext
 
                             # Log messages if logging is enabled.
                             if logMessages:
@@ -1661,7 +1656,7 @@ try:
 
                                         if fileName == 'r':
                                             print '\nFile Rejected. Continuing\n'
-                                            plaintext == ''
+                                            plaintext   == ''
                                             fileReceive  = False
                                             fileReceived = False
                                             discardFile  = True
@@ -1673,7 +1668,7 @@ try:
                                             if os.path.isfile(fileName):
                                                 overwrite = raw_input('File already exists. Type \'YES\' to overwrite: ')
 
-                                                if overwrite == 'YES':
+                                                if overwrite   == 'YES':
                                                     askFileName = False
                                                 continue
 
@@ -1727,6 +1722,6 @@ try:
                 continue
 
 except KeyboardInterrupt:
-    exit_with_msg('Exiting TFC.')
+    exit_with_msg('Exiting TFC.', False)
 
 

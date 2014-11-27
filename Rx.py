@@ -54,7 +54,7 @@ logTimeStampFmt    = '%Y-%m-%d / %H:%M:%S'
 displayTimeFmt     = '%H:%M'
 kfOWIterations     = 3
 
-localTesting       = True
+localTesting       = False
 
 if not localTesting:
     port        = serial.Serial('/dev/ttyAMA0', baudrate=9600, timeout=0.1)

@@ -1,7 +1,7 @@
 Project Description:
 --------------------
 
-TFC-CEV is a high assurance encryption plugin for Pidgin IM client that combines free and open source hardware and software. Secure by design implementation provides a no-compromise layer over the standard and OTR encrypted communication that addresses automatable attacks used by intelligence agencies for mass surveillance:
+TFC-CEV is a high assurance encryption plugin for Pidgin IM client that combines free and open source hardware and software. Secure by design implementation provides a no-compromise layer that addresses automatable attacks used by intelligence agencies for mass surveillance:
 
 1. Computationally secure **cascading** encryption ensures privacy and integrity of communication.
 

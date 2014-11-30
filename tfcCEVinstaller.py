@@ -684,7 +684,7 @@ Select configuration that matches your OS:
                     subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/Tx.py', shell=True).wait()
                     subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/Rx.py', shell=True).wait()
                     subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/NH.py', shell=True).wait()
-                    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/tfc-CEV-installer.py -O tfcInstaller.py', shell=True).wait()
+                    subprocess.Popen('wget https://raw.githubusercontent.com/maqp/tfc-cev/master/tfcCEVinstaller.py -O tfc-CEV-installer.py', shell=True).wait()
 
                     changeToLocal('Tx.py')
                     changeToLocal('Rx.py')
@@ -718,11 +718,11 @@ Select configuration that matches your OS:
 
                 os.system('clear')
                 print 'Test folders named after each user generated succesfully. Before each user '        \
-                      'can run their test version of TFC, they must run the bundled tfc-CEV-Installer.py '      \
+                      'can run their test version of TFC, they must run the bundled tfc-CEV-installer.py ' \
                       'and choose installation configuration 9. When the installer has installed '         \
                       'dependencies, the user is ready to run the Tx.py, Rx.py and NH.py. Note '           \
                       'that other users don\'t have to create their own keyfiles for insecure testing.\n\n'\
-                      'The pycrypto-master folder in tfcCEVInstaller.py directory is only needed if '\
+                      'The pycrypto-master folder in tfcCEVInstaller.py directory is only needed if '      \
                       'you are going to audit the pyCrypto AES-library.\n\n'
                 exit()
             else:

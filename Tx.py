@@ -48,7 +48,7 @@ lMsgSleep          = 0.2
 debugging          = False
 emergencyExit      = False
 randomSleep        = False
-localTesting       = True
+localTesting       = False
 
 if not localTesting:
     port = serial.Serial('/dev/ttyAMA0', baudrate=9600, timeout=0.1)

@@ -14,7 +14,7 @@ import sys
 ######################################################################
 
 # TFC-CEV (Cascading Encryption Version) || genKey.py
-version = 'CEV 0.4.12 beta'
+version = 'CEV 0.4.13 beta'
 
 """
 This software is part of the TFC application, which is free software:

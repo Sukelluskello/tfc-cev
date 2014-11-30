@@ -18,7 +18,7 @@ from time import sleep
 ######################################################################
 
 # TFC-CEV (Cascading Encryption Version) || Rx.py
-version = 'CEV 0.4.12 beta'
+version = 'CEV 0.4.13 beta'
 
 """
 This software is part of the TFC application, which is free software:
@@ -39,14 +39,13 @@ for more details. For a copy of the GNU General Public License, see
 #                           CONFIGURATION                            #
 ######################################################################
 
-fileSavingAllowed  = False
+fileSavingAllowed  = True
 debugging          = False
 logMessages        = False
 injectionTesting   = False
 
 logChangeAllowed   = True
 logTamperingEvent  = True
-logReplayedEvent   = True
 showLongMsgWarning = True
 displayTime        = True
 
@@ -54,7 +53,7 @@ logTimeStampFmt    = '%Y-%m-%d / %H:%M:%S'
 displayTimeFmt     = '%H:%M'
 kfOWIterations     = 3
 
-localTesting       = False
+localTesting       = True
 
 if not localTesting:
     port        = serial.Serial('/dev/ttyAMA0', baudrate=9600, timeout=0.1)
@@ -951,7 +950,6 @@ def get_keyset(xmpp, output=True):
 
 
 
-
 def rotate_keyset(xmpp, keySet):
     try:
 
@@ -1235,6 +1233,7 @@ def search_keyfiles():
                       'Make sure keyfiles are in same directory as Rx.py\n')
 
 
+
 def disp_opsec_warning():
     print '''
 REMEMBER! DO NOT MOVE RECEIVED FILES FROM RxM TO LESS SECURE
@@ -1323,6 +1322,37 @@ def write_log_entry(nick, xmpp, message):
         print '\nM(write_log_entry): Added log entry \n\'' + message + '\' for contact ' + xmpp + '\n'
 
 
+
+def packet_anomality(errorType='', packetType=''):
+
+    if errorType == 'MAC':
+        print 'WARNING! MAC of received ' + packetType + ' failed!\n' \
+              'This might indicate an attempt to tamper ' + packetType + 's!\n'
+        errorMsg = 'AUTOMATIC LOG ENTRY: MAC of ' + packetType + ' failed..'
+
+    if errorType == 'replay:':
+        print 'WARNING! Received a ' + packetType + ', the key-id of which is not valid!\n' \
+              'This might indicate tampering or keyfile mismatch.'
+
+        errorMsg = 'AUTOMATIC LOG ENTRY: Replayed ' + packetType +' detected.'
+
+    if errorType == 'crc':
+        print 'WARNING! Received a ' + packetType + ', the CRC of which failed!\n' \
+              'This might indicate tampering or problem with your RxM Datadiode.'
+        errorMsg = 'AUTOMATIC LOG ENTRY: CRC error in ' + packetType + '.'
+
+    if errorType == 'hash':
+        print 'WARNING! The hash of received long ' + packetType + ' failed!\n' \
+              'The file was rejected.'
+        errorMsg = 'AUTOMATIC LOG ENTRY: hash error in long ' + packetType + '.'
+
+    if logTamperingEvent:
+        with open('syslog.tfc', 'a+') as file:
+            file.write( datetime.datetime.now().strftime(logTimeStampFmt) + errorMsg + '\n')
+        print '\nThis event has been logged to syslog.tfc.\n'
+
+
+
 def exit_with_msg(message, error=True):
     os.system('clear')
     if error:
@@ -1330,6 +1360,31 @@ def exit_with_msg(message, error=True):
     else:
         print '\n' + message + '\n'
     exit()
+
+
+
+def store_file(preName, fileName):
+    if not os.path.isfile('f.' + preName + '.tfc'):
+        print '\nError: Could not find tmp file.\n'
+        return None
+
+    if os.path.isfile(fileName):
+        os.system('clear')
+        print '\nError: file already exists. Please use different file name.\n'
+        return None
+
+    if fileName != 'r':
+        subprocess.Popen('base64 -d f.' + preName + '.tfc > ' + fileName, shell=True).wait()
+        print '\nStored tmp file \'f.' + preName + '.tfc\' as \'' + fileName + '\'.'
+        subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u f.' + preName + '.tfc', shell=True).wait()
+        print 'Temporary file \'f.' + preName + '.tfc\' has been overwritten.\n'
+        disp_opsec_warning()
+
+    else:
+        subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u f.' + preName + '.tfc', shell=True).wait()
+        print 'Temporary file \'f.' + preName + '.tfc\' was rejected and overwritten.\n'
+
+    return None
 
 
 
@@ -1368,6 +1423,28 @@ else:
 print header + '\n'
 
 
+# Set initial status of file and message reception.
+longMsgOnWay = {}
+msgReceived  = {}
+message      = {}
+for key in keyFileNames:
+    xmpp               = key[:-2]
+    longMsgOnWay[xmpp] = False
+    msgReceived[xmpp]  = False
+    message[xmpp]      = ''
+
+
+if fileSavingAllowed:
+    fileOnWay    = {}
+    fileReceived = {}
+    fileA        = {}
+    for key in keyFileNames:
+        xmpp               = key[:-2]
+        fileOnWay[xmpp]    = False
+        fileReceived[xmpp] = False
+        fileA[xmpp]        = ''
+
+
 
 ######################################################################
 #                               LOOP                                 #
@@ -1377,7 +1454,6 @@ try:
     while True:
         sleep(0.01)
         receivedPacket = ''
-        fileReceived = False
 
         if localTesting:
             try:
@@ -1397,14 +1473,13 @@ try:
             try:
 
                 # Process unencrypted commands.
-                if receivedPacket.startswith('exitTFC'):
+                if receivedPacket.startswith('EXITTFC'):
                     exit_with_msg('Exiting TFC.', False)
 
 
-                if receivedPacket.startswith('clearScreen'):
+                if receivedPacket.startswith('CLEARSCREEN'):
                     os.system('clear')
                     continue
-
 
 
                 ####################################
@@ -1414,103 +1489,110 @@ try:
                     cmdMACln, crcPkg = receivedPacket[6:].split('~')
                     crcPkg           = crcPkg.strip('\n')
 
+
                     # Check that CRC32 Matches.
-                    if crc32(cmdMACln) == crcPkg:
-                        payload, keyID = cmdMACln.split('|')
-                        ciphertext     = base64_decode(payload)
+                    if crc32(cmdMACln) != crcPkg:
+                        packet_anomality('crc', 'command')
+                        continue
+
+                    payload, keyID = cmdMACln.split('|')
+                    ciphertext     = base64_decode(payload)
 
 
+                    try:
                         # Check that keyID is fresh.
                         if int(keyID) < get_keyID('rx.local'):
-                            print '\nWARNING! Expired cmd key detected!\n'\
-                                  'This might indicate a replay attack!\n'
+                            packet_anomality('replay', 'command')
+                            continue
 
-                            if logReplayedEvent:
-                                write_log_entry('', '', 'AUTOMATIC LOG ENTRY: Replayed/malformed command received!')
+                    except KeyError:
+                        packet_anomality('tamper', 'command')
+                        continue
+
+                    except TypeError:
+                        packet_anomality('tamper', 'command')
+                        continue
+
+
+                    # Check that local keyfile for decryption exists.
+                    if not os.path.isfile('rx.local.e'):
+                        print '\nError: rx.local.e was not found.\n'\
+                              'Command could not be decrypted.\n'
+                        continue
+
+
+                    # Decrypt command if MAC verification succeeds.
+                    try:
+                        paddedCommand = decrypt('rx.local', ciphertext, keyID)
+                        command       = depadding(paddedCommand)
+
+                    except ValueError:
+                            if logTamperingEvent:
+                                packet_anomality('MAC', 'command')
+                            continue
+                    except TypeError:
+                            packet_anomality('MAC', 'command')
                             continue
 
 
-                        # Check that local keyfile for decryption exists.
-                        if not os.path.isfile('rx.local.e'):
-                            print '\nError: rx.local.e was not found.\n'\
-                                  'Command could not be decrypted.\n'
-                            continue
-
-
-                        try:
-                            # Decrypt command if MAC verification succeeds.
-                            paddedCommand = decrypt('rx.local', ciphertext, keyID)
-
-                        except ValueError:
-                                if logTamperingEvent:
-                                    write_log_entry('','', 'AUTOMATIC LOG ENTRY: Tampered/malformed command received!')
-                                continue
-                        except TypeError:
-                                if logTamperingEvent:
-                                    write_log_entry('','', 'AUTOMATIC LOG ENTRY: Tampered/malformed command received!')
-                                continue
-
-                        # Remove padding.
-                        command = depadding(paddedCommand)
-
-
-                        ##########################
-                        #     Enable logging     #
-                        ##########################
-                        if command == 'logson':
-                            if logChangeAllowed:
-                                if logMessages:
-                                    print 'Logging is already enabled.'
-                                else:
-                                    logMessages = True
-                                    print 'Logging has been enabled.'
-                                continue
-
+                    ##########################
+                    #     Enable logging     #
+                    ##########################
+                    if command == 'LOGSON':
+                        if logChangeAllowed:
+                            if logMessages:
+                                print 'Logging is already enabled.'
                             else:
-                                print '\nLogging settings can not be altered: Boolean\n'\
-                                      'value \'logChangeAllowed\' is set to False.\n'
-                                continue
-
-
-                        ###########################
-                        #     Disable logging     #
-                        ###########################
-                        if command == 'logsoff':
-                            if logChangeAllowed:
-                                if not logMessages:
-                                    print 'Logging is already disabled.'
-                                else:
-                                    logMessages = False
-                                    print 'Logging has been disabled.'
-                                continue
-
-                            else:
-                                print '\nLogging settings can not be altered: Boolean\n'\
-                                      'value \'logChangeAllowed\' is set to False.\n'
-                                continue
-
-
-                        #######################
-                        #     Change nick     #
-                        #######################
-                        if 'nick=' in command:
-
-                            xmpp, cmdPar   = command.split('/')
-                            cmd, parameter = cmdPar.split('=')
-
-                            # Write and load nick.
-                            write_nick(xmpp, parameter)
-                            rxNick = get_nick(xmpp)
-
-                            print '\nChanged ' + xmpp[3:] + ' nick to \'' + rxNick + '\'\n'
+                                logMessages = True
+                                print 'Logging has been enabled.'
                             continue
 
-                    else:
-                        os.system('clear')
-                        print '\nCRC checksum error: Command received by RxM\n' \
-                                 'was malformed. If this error is persistent\n,'\
-                                 'check the batteries of your RxM data diode.\n'
+                        else:
+                            print '\nLogging settings can not be altered: Boolean\n'\
+                                  'value \'logChangeAllowed\' is set to False.\n'
+                            continue
 
+
+                    ###########################
+                    #     Disable logging     #
+                    ###########################
+                    if command == 'LOGSOFF':
+                        if logChangeAllowed:
+                            if not logMessages:
+                                print 'Logging is already disabled.'
+                            else:
+                                logMessages = False
+                                print 'Logging has been disabled.'
+                            continue
+
+                        else:
+                            print '\nLogging settings can not be altered: Boolean\n'\
+                                  'value \'logChangeAllowed\' is set to False.\n'
+                            continue
+
+
+                    #################################
+                    #     Decode and store file     #
+                    #################################
+                    if command.startswith('STOREFILE '):
+                        notUsed, tmpName, outoutName = command.split(' ')
+                        store_file(tmpName, outoutName)
+                        continue
+
+
+                    #######################
+                    #     Change nick     #
+                    #######################
+                    if command.startswith('NICK '):
+
+                        notUsed, xmpp, nick = command.split(' ')
+
+                        # Write and load nick.
+                        write_nick(xmpp, nick)
+                        storedNick = get_nick(xmpp)
+
+                        print '\nChanged ' + xmpp[3:] + ' nick to \'' + storedNick + '\'\n'
+                        continue
 
 
                 ####################################
@@ -1522,203 +1604,311 @@ try:
 
 
                     # Check that CRC32 Matches.
-                    if crc32(ctMACln) == crcPkg:
-                        payload, keyID = ctMACln.split('|')
-                        ciphertext     = base64_decode(payload)
+                    if crc32(ctMACln) != crcPkg:
+                        packet_anomality('crc', 'message')
+                        continue
+
+                    payload, keyID = ctMACln.split('|')
+                    ciphertext     = base64_decode(payload)
 
 
+                    try:
                         # Check that keyID is fresh.
-                        if  int(keyID) < get_keyID(xmpp):
-                            print '\nWARNING! Expired msg key detected!\n'\
-                                  'This might indicate a replay attack!\n'
-
-                            if logReplayedEvent:
-                                write_log_entry('', xmpp, 'AUTOMATIC LOG ENTRY: Replayed/malformed message received!')
+                        if int(keyID) < get_keyID(xmpp):
+                            packet_anomality('replay', 'message')
                             continue
 
+                    except KeyError:
+                        packet_anomality('tamper', 'message')
+                        continue
 
-                        # Check that keyfile for decryption exists.
-                        if not os.path.isfile(xmpp + '.e'):
-                            print '\nError: keyfile for contact ' + xmpp + 'was\n'\
-                                  'not found.\nMessage could not be decrypted.\n'
-                            continue
+                    except TypeError:
+                        packet_anomality('tamper', 'message')
+                        continue
 
-
-                        try:
-                            # Decrypt message if MAC verification succeeds.
-                            plaintext = decrypt(xmpp, ciphertext, keyID)
-
-                        except ValueError:
-                                if logTamperingEvent:
-                                    write_log_entry('',xmpp, 'AUTOMATIC LOG ENTRY: Tampered/malformed message received!')
-                                continue
-
-                        except TypeError:
-                                if logTamperingEvent:
-                                    write_log_entry('',xmpp, 'AUTOMATIC LOG ENTRY: Tampered/malformed message received!')
-                                continue
-
-                        # Remove padding from message.
-                        plaintext = depadding(plaintext)
-
-                        if plaintext.startswith('s'):
-
-                            ###########################################
-                            #     Process short standard messages     #
-                            ###########################################
-
-                            if plaintext.startswith('sTFCFILE'):
-                                if fileSavingAllowed:
-                                    fileReceive  = True
-                                    fileReceived = True
-                            plaintext = plaintext[1:]
-
-                        else:
-
-                            ####################################################
-                            #     Process long messages and file transfers     #
-                            ####################################################
-
-                            # Header packet of long message / file.
-                            if plaintext.startswith('l'):
-                                if plaintext.startswith('lTFCFILE'):
-
-                                    if fileSavingAllowed:
-                                        print 'Receiving file, this make take a while. You can\'t\n'\
-                                              'receive messages until you have stored/rejected the file'
-                                        fileReceive = True
-                                else:
-                                    if showLongMsgWarning:
-                                        print '\n' + 'Receiving long message, please wait...\n'
-
-                                longMsg[xmpp] = plaintext[1:]
-                                continue
-
-
-                            # Appended packet of long message / file.
-                            if plaintext.startswith('a'):
-                                longMsg[xmpp] = longMsg[xmpp] + plaintext[1:]
-                                continue
-
-
-                            # Final packet of long message / file.
-                            if plaintext.startswith('e'):
-                                longMsg[xmpp] = longMsg[xmpp] + plaintext[1:]
-                                plaintext     = longMsg[xmpp] + '\n'
-                                if fileReceive:
-                                    fileReceived = True
-
-
-                        if not fileReceive:
-
-                            ######################################
-                            #     Process printable messages     #
-                            ######################################
-
-                            if xmpp.startswith('me.'):
-                                nick = 'Me > ' + get_nick('rx' + xmpp[2:])
-                            else:
-                                nick = 5 * ' ' + get_nick(xmpp)
-
-                            # Print message to user.
-                            if displayTime:
-                                msgTime = datetime.datetime.now().strftime(displayTimeFmt)
-                                print msgTime + '  ' + nick + ':  ' + plaintext
-                            else:
-                                print                  nick + ':  ' + plaintext
-
-                            # Log messages if logging is enabled.
-                            if logMessages:
-                                if nick.startswith('Me > '):
-                                    spacing = len(get_nick('rx' + xmpp[2:]))
-                                    nick    = (spacing - 2) * ' ' + 'Me'
-                                    write_log_entry(nick, xmpp[3:], plaintext)
-                                else:
-                                    write_log_entry(nick[5:], xmpp[3:], plaintext)
-
-
-                        if fileReceive:
-
-                            ##################################
-                            #     Process received files     #
-                            ##################################
-
-                            if fileSavingAllowed:
-                                if fileReceived:
-
-                                    discardFile = False
-                                    askFileName = True
-
-                                    while askFileName:
-                                        os.system('clear')
-                                        fileName = raw_input('\nFile Received. Enter filename (\'r\' rejects file): ')
-
-
-                                        if fileName == 'r':
-                                            print '\nFile Rejected. Continuing\n'
-                                            plaintext   == ''
-                                            fileReceive  = False
-                                            fileReceived = False
-                                            discardFile  = True
-                                            askFileName  = False
-                                            continue
-
-
-                                        else:
-                                            if os.path.isfile(fileName):
-                                                overwrite = raw_input('File already exists. Type \'YES\' to overwrite: ')
-
-                                                if overwrite   == 'YES':
-                                                    askFileName = False
-                                                continue
-
-                                            else:
-                                                askFileName = False
-                                                continue
-
-                                    if not discardFile:
-
-                                        # Save received base64 data to temporary file and decode it.
-                                        with open('tfcTmpFile', 'w+') as file:
-                                            file.write(plaintext[7:])
-
-                                        subprocess.Popen('base64 -d tfcTmpFile > ' + fileName,                    shell=True).wait()
-
-                                        # Shred temporary file.
-                                        subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u tfcTmpFile', shell=True).wait()
-
-                                        disp_opsec_warning()
-
-                                    fileReceive  = False
-                                    fileReceived = False
-
-
-                                else:
-                                    continue
-
-                            else:
-                                plaintext == ''
-                                continue
-
+                    # Check that keyfile for decryption exists.
+                    if not os.path.isfile(xmpp + '.e'):
+                        print '\nError: keyfile for contact ' + xmpp + 'was not found.\n' \
+                              'Message could not be decrypted.\n'
                         continue
 
 
+                    # Decrypt message if MAC verification succeeds.
+                    try:
+                        decryptedPacket = decrypt(xmpp, ciphertext, keyID)
+                        decryptedPacket = depadding(decryptedPacket)
+
+                    except ValueError:
+                            if logTamperingEvent:
+                                packet_anomality('MAC', 'message')
+                            continue
+
+                    except TypeError:
+                            if logTamperingEvent:
+                                packet_anomality('MAC', 'message')
+                            continue
+
+
+                    #########################################################
+                    #     Process cancelled messages and file transfers     #
+                    #########################################################
+                    '''
+                    All received message/ file packets have header {s,l,a,e,c}{m,f}.
+
+                    Second character:
+                        m = message
+                        f = file
+
+                    First character:
+                        s = short packet: message can be shown or stored immediately.
+
+                        l = first     packet of long msg / file
+                        a = appended  packet of long msg / file
+                        e = last      packet of long msg / file, can be shown / stored.
+                        c = cancelled packet of long msg / file, discarts packet content.
+
+                    '''
+
+                    # Cancel file.
+                    if decryptedPacket.startswith('cf'):
+                        if fileOnWay[xmpp]:
+                            if xmpp.startswith('me.'):
+                                print 'File transmission to contact \'' + xmpp[3:] + '\' cancelled.\n'
+                            if xmpp.startswith('rx.'):
+                                print 'Contact \'' + xmpp[3:] + '\' cancelled file transmission.\n'
+
+                            fileOnWay[xmpp]    = False
+                            fileReceived[xmpp] = False
+                            fileA[xmpp]        = ''
+                            continue
+
+                    # Cancel message.
+                    if decryptedPacket.startswith('cm'):
+                        if longMsgOnWay[xmpp]:
+                            if xmpp.startswith('me.'):
+                                print 'Long message to contact \'' + xmpp[3:] + '\' cancelled.\n'
+                            if xmpp.startswith('rx.'):
+                                print 'Contact \'' + xmpp[3:] + '\' cancelled long message.\n'
+
+                            longMsgOnWay[xmpp] = False
+                            msgReceived[xmpp]  = False
+                            message[xmpp]      = ''
+                            continue
+
+
+                    #####################################################
+                    #     Process short messages and file transfers     #
+                    #####################################################
+
+                    # Even if cf / cm packet dropped, Rx.py should inform user
+                    # about interrupted reception of long message / file when
+                    # short message / file is received.
+
+                    # Short file.
+                    if decryptedPacket.startswith('sf'):
+                        if fileOnWay[xmpp]:
+                            if xmpp.startswith('me.'):
+                                print 'File transmission to contact \'' + xmpp[3:] + '\' cancelled.\n'
+                            if xmpp.startswith('rx.'):
+                                print 'Contact \'' + xmpp[3:] + '\' cancelled file transmission.\n'
+
+                        if fileSavingAllowed:
+                            fileReceived[xmpp] = True
+                            fileOnWay[xmpp]    = False
+                            fileA[xmpp]        = decryptedPacket[2:]
+
+
+                    # Short message.
+                    if decryptedPacket.startswith('sm'):
+                        if longMsgOnWay[xmpp]:
+                            if xmpp.startswith('me.'):
+                                print 'Long message to contact \'' + xmpp[3:] + '\' cancelled.\n'
+                            if xmpp.startswith('rx.'):
+                                print 'Contact \'' + xmpp[3:] + '\' cancelled long message.\n'
+
+                        msgReceived[xmpp]  = True
+                        longMsgOnWay[xmpp] = False
+                        message[xmpp]      = decryptedPacket[2:]
+
+
+
+                    ####################################################
+                    #     Process long messages and file transfers     #
+                    ####################################################
+
+                    # Header packet of long file.
+                    if decryptedPacket.startswith('lf'):
+                        if fileOnWay[xmpp]:
+                            if xmpp.startswith('me.'):
+                                print 'File transmission to contact \'' + xmpp[3:] + '\' cancelled.\n'
+                            if xmpp.startswith('rx.'):
+                                print 'Contact \'' + xmpp[3:] + '\' cancelled file transmission.\n'
+
+                        # Print notification about receiving file.
+                        if fileSavingAllowed:
+                            if xmpp.startswith('me.'):
+                                print'\nReceiving file sent to \''       + xmpp[3:] + '\'.\n'
+                            if xmpp.startswith('rx.'):
+                                print '\nReceiving file from contact \'' + xmpp[3:] + '\'.\n'
+
+                            fileReceived[xmpp] = False
+                            fileOnWay[xmpp]    = True
+                            fileA[xmpp]        = decryptedPacket[2:]
+                            continue
+
+
+                    # Header packet of long message.
+                    if decryptedPacket.startswith('lm'):
+                        if longMsgOnWay[xmpp]:
+                            if xmpp.startswith('me.'):
+                                print 'Long message to contact \'' + xmpp[3:] + '\' cancelled.\n'
+                            if xmpp.startswith('rx.'):
+                                print 'Contact \'' + xmpp[3:] + '\' cancelled long message.\n'
+
+                        if showLongMsgWarning:
+                            if xmpp.startswith('me.'):
+                                print '\nReceiving long message sent to \''      + xmpp[3:] + '\'.\n'
+                            if xmpp.startswith('rx.'):
+                                print '\nReceiving long message from contact \'' + xmpp[3:] + '\'.\n'
+
+                        msgReceived[xmpp]  = False
+                        longMsgOnWay[xmpp] = True
+                        message[xmpp]      = decryptedPacket[2:]
+                        continue
+
+
+                    # Append packet of long file.
+                    if decryptedPacket.startswith('af'):
+                            if fileSavingAllowed:
+
+                                fileReceived[xmpp] = False
+                                fileOnWay[xmpp]    = True
+                                fileA[xmpp]        = fileA[xmpp] + decryptedPacket[2:]
+                                continue
+
+
+                    # Append packet of long message.
+                    if decryptedPacket.startswith('am'):
+
+                            msgReceived[xmpp]  = False
+                            longMsgOnWay[xmpp] = True
+                            message[xmpp]      = message[xmpp] + decryptedPacket[2:]
+                            continue
+
+
+                    #Final packet of long file.
+                    if decryptedPacket.startswith('ef'):
+                        if fileSavingAllowed:
+
+                            fileA[xmpp] = fileA[xmpp] + decryptedPacket[2:]
+
+                            fileContent = fileA[xmpp][:-64]
+                            hashOfFile  = fileA[xmpp][-64:]
+
+                            if keccak_256(fileContent) != hashOfFile:
+                                os.system('clear')
+                                packet_anomality('hash', 'file')
+                                continue
+
+                            fileA[xmpp]        = fileContent
+                            fileReceived[xmpp] = True
+                            fileOnWay[xmpp]    = False
+
+
+                    #Final packet of long message.
+                    if decryptedPacket.startswith('em'):
+
+                        message[xmpp] = message[xmpp] + decryptedPacket[2:]
+
+                        msgContent = message[xmpp][:-64]
+                        hashOfMsg  = message[xmpp][-64:]
+
+                        if keccak_256(msgContent) != hashOfMsg:
+                            os.system('clear')
+
+                            packet_anomality('hash', 'message')
+                            continue
+
+                        message[xmpp]      = msgContent
+                        msgReceived[xmpp]  = True
+                        longMsgOnWay[xmpp] = False
+
+
+
+                    ######################################
+                    #     Process printable messages     #
+                    ######################################
+                    if msgReceived[xmpp]:
+
+                        if xmpp.startswith('me.'):
+                            nick = 'Me > ' + get_nick('rx' + xmpp[2:])
+                        else:
+                            nick = 5 * ' ' + get_nick(xmpp)
+
+
+                        # Print timestamp and message to user.
+                        if displayTime:
+                            msgTime = datetime.datetime.now().strftime(displayTimeFmt)
+                            print msgTime + '  ' + nick + ':  ' + message[xmpp]
+                        else:
+                            print                  nick + ':  ' + message[xmpp]
+
+
+                        # Log messages if logging is enabled.
+                        if logMessages:
+                            if nick.startswith('Me > '):
+                                spacing = len(get_nick('rx' + xmpp[2:]))
+                                nick    = (spacing - 2) * ' ' + 'Me'
+                                write_log_entry(nick, xmpp[3:], message[xmpp])
+                            else:
+                                write_log_entry(nick[5:], xmpp[3:], message[xmpp])
+
+                        msgReceived[xmpp]  = False
+                        longMsgOnWay[xmpp] = False
+                        message[xmpp]      = ''
+                        continue
+
+
+
+                    ##################################
+                    #     Process received files     #
+                    ##################################
+                    if fileReceived[xmpp]:
+
+                        # Generate random filename.
+                        tmpFileName = 'f.' + str(binascii.hexlify(os.urandom(2))) + '.tfc'
+                        while os.path.isfile(tmpFileName):
+                            tmpFileName = 'f.' + str(binascii.hexlify(os.urandom(2))) + '.tfc'
+
+                        # Store file.
+                        with open(tmpFileName, 'w+') as file:
+                            file.write(fileA[xmpp])
+
+                        if xmpp.startswith('me.'):
+                            print 'File sent to contact \'' + xmpp[3:] + '\' received locally.\n'
+                        if xmpp.startswith('rx.'):
+                            print 'File transmission from contact \'' + xmpp[3:] + '\' complete.\n'
+
+                        print 'Stored base64 encoded file under temporary file name \'' + tmpFileName + '\'.\n'   \
+                              'Use command \'/store ' + tmpFileName[2:][:-4] + ' <desired file name>\' to obtain file or\n'\
+                              'use command \'/store ' + tmpFileName[2:][:-4] + ' r\' to reject file.\n'
+
+                        fileReceived[xmpp] = False
+                        fileOnWay[xmpp]    = False
+                        fileA[xmpp]        = ''
+                        continue
+
                     else:
-                        print '\nCRC checksum error: Message received by RxM was malformed\n.'\
-                                'Note that this error occurred between your NH and RxM so\n'  \
-                                'recipient most likely received the message. If this error\n' \
-                                'is persistent, check the batteries of your RxM data diode.\n'
+                        continue
 
             except IndexError:
                 os.system('clear')
-                print '\nWARNING! Packet format is invalid!\n'\
-                        'This might indicate message tampering!\n'
+                packet_anomality('tamper', 'packet')
                 continue
 
             except ValueError:
                 os.system('clear')
-                print '\nWARNING! Packet format is invalid!\n'\
-                        'This might indicate message tampering!\n'
+                packet_anomality('tamper', 'packet')
                 continue
 
 except KeyboardInterrupt:

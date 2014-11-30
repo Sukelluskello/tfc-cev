@@ -13,7 +13,7 @@ import time
 ######################################################################
 
 # TFC-CEV (Cascading Encryption Version) || tfcInstaller.py
-version = 'CEV 0.4.12 beta'
+version = 'CEV 0.4.13 beta'
 
 """
 This software is part of the TFC application, which is free software:

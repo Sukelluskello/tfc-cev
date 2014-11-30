@@ -1325,16 +1325,22 @@ def write_log_entry(nick, xmpp, message):
 
 def packet_anomality(errorType='', packetType=''):
 
+    errorMsg = ''
+
     if errorType == 'MAC':
         print 'WARNING! MAC of received ' + packetType + ' failed!\n' \
               'This might indicate an attempt to tamper ' + packetType + 's!\n'
-        errorMsg = 'AUTOMATIC LOG ENTRY: MAC of ' + packetType + ' failed..'
+        errorMsg = 'AUTOMATIC LOG ENTRY: MAC of ' + packetType + ' failed.'
 
     if errorType == 'replay:':
         print 'WARNING! Received a ' + packetType + ', the key-id of which is not valid!\n' \
               'This might indicate tampering or keyfile mismatch.'
-
         errorMsg = 'AUTOMATIC LOG ENTRY: Replayed ' + packetType +' detected.'
+
+    if errorType == 'tamper':
+        print 'WARNING! Received a ' + packetType + ' that appears to be malformed!\n'\
+              'This might indicate tampering of packets.'
+        errorMsg = 'AUTOMATIC LOG ENTRY: Possibly tampered ' + packetType + ' detected.'
 
     if errorType == 'crc':
         print 'WARNING! Received a ' + packetType + ', the CRC of which failed!\n' \

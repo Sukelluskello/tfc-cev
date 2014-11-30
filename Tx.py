@@ -48,7 +48,7 @@ lMsgSleep          = 0.2
 debugging          = False
 emergencyExit      = False
 randomSleep        = False
-localTesting       = False
+localTesting       = True
 
 if not localTesting:
     port = serial.Serial('/dev/ttyAMA0', baudrate=9600, timeout=0.1)
@@ -1508,7 +1508,7 @@ def tab_complete(text, state):
 def print_help():
     ttyW = get_terminal_width()
 
-    if ttyW < 65:
+    if ttyW < 72:
         le = '\n' + ttyW * '-'
         print                                                                   le
         print '/about\nDisplay information about TFC'                         + le
@@ -1526,14 +1526,16 @@ def print_help():
         print '/nick <nick>\nChange contact nickname'                         + le
         print '/quit & /exit\nExit TFC'                                       + le
         print '/store <b64 file> <output file>\nDecodes received file'        + le
-        print '/group\nList group members'                                    + le
-        print '/groups\nList available groups'                                + le
+        print '/group\nList members of selected group'                        + le
+        print '/groups\nList currently available groups and their members'    + le
         print '/group <groupname>\nSelect group'                              + le
         print '/group create <groupname> <xmpp1> <xmpp2>\nCreate new group'   + le
         print '/group add <groupname> <xmpp1> <xmpp2>\nAdd xmpp to group'     + le
         print '/group rm <groupname> <xmpp1> <xmpp2>\nRemove xmpp from group' + le
+        print 'Shift + PgUp/PgDn\nScroll terminal up/dn'                      + le
         print '/store <tmp f.name> <output f.name>\nSave received tmp file'   + le
-        print '/shift + PgUp/PgDn\nScroll terminal up/dn'                     + le
+        print '/newkf tx <contactXMPP> 1.kf\nChange keyfile for sending'      + le
+        print '/newkf rx <contactXMPP> 1.kf\nChange keyfile for receiving'    + le
         print ''
 
     else:
@@ -1543,26 +1545,36 @@ def print_help():
             print   ' /clear'                                      + 16 * ' ' + 'Clear screens'
             print   ' \'  \' (2x spacebar) '                                  + 'Emergency exit'
         else:
-            print   ' /clear & \'  \''                             + 9  * ' ' + 'Clear screens'
-        print       ' /file <filename>'                            + 6  * ' ' + 'Send file to recipient'
+            print   ' /clear & \'  \''                             +  9 * ' ' + 'Clear screens'
+        print       ' /file <file name>'                           +  5 * ' ' + 'Send file to recipient'
         print       ' /help'                                       + 17 * ' ' + 'Display this list of commands'
-        print       ' /logging <on/off>'                           + 5  * ' ' + 'Enable/disable logging on Rx.py'
-        print       ' /msg <ID/xmpp/group>'                        + 2  * ' ' + 'Change recipient'
+        print       ' /logging <on/off>'                           +  5 * ' ' + 'Enable/disable logging on Rx.py'
+        print       ' /msg <ID/xmpp/group>'                        +  2 * ' ' + 'Change recipient'
         print       ' /names'                                      + 16 * ' ' + 'Displays available contacts'
-        print       ' /paste'                                      + 16 * ' ' + 'Enable paste-mode'
         print       ' /nick <nick>'                                + 10 * ' ' + 'Change contact\'s nickname on Tx.py & Rx.py'
-        print       ' /quit & /exit'                               + 9  * ' ' + 'Exits TFC'
-        print                                                      ttyW * '-'
-        print       ' /group'                                      + 16 * ' ' + 'List group members'
-        print       ' /groups'                                     + 15 * ' ' + 'List available groups'
-        print       ' /group <groupname>'                          + 4  * ' ' + 'Select group\n'
-        print       ' /group create <groupname> <xmpp1> <xmpp2>'   + 1  * ' ' + '\n Create new group called <groupname>, add xmpp-addresses.\n'
-        print       ' /group add <groupname> <xmpp1> <xmpp2>'      + 1  * ' ' + '\n Add xmpp-addresses to group <groupname>\n'
-        print       ' /group rm <groupname> <xmpp1> <xmpp2>'       + 1  * ' ' + '\n Remove xmpp-addresses from group <groupname>'
-        print                                                      ttyW * '-'
-        print       ' /store <b64 file name> <file name>'          + 1  * ' ' + '\n Decodes received tmp file and stores it as <file name> \n'
-        print       ' shift + PgUp/PgDn'                           + 1  * ' ' + '\n Scroll terminal up/down\n'
+        print       ' /paste'                                      + 16 * ' ' + 'Enable paste-mode'
+        print       ' /quit & /exit'                               +  9 * ' ' + 'Exits TFC'
+        print       ' Shift + PgUp/PgDn'                           +  5 * ' ' + 'Scroll terminal up/down'
 
+        print ttyW * '-'
+        print       ' /groups'                                     + 15 * ' ' + 'List currently available groups and their members'
+        print       ' /group'                                      + 16 * ' ' + 'List group members'
+        print       ' /group <group name>'                         +  3 * ' ' + 'Select group\n'
+
+        print       ' /group create <group name> <xmpp 1> <xmpp 2> .. <xmpp n>\n' \
+                    ' Create new group named <group name>, add xmpp-addresses.\n'
+
+        print       ' /group add <group name> <xmpp 1> <xmpp 2> .. <xmpp n>\n' \
+                    ' Add xmpp-addresses to group <group name>\n'
+
+        print       ' /group rm <group name> <xmpp 1> <xmpp 2> .. <xmpp n>\n' \
+                    ' Remove xmpp-addresses from group <group name>.'
+
+        print ttyW * '-' + '\n'
+
+        print       ' /store <tmp file name> <output file name>\n '   +  41 * '-' + '\n'\
+                    ' Decodes automatically saved received file <temp file name>\n'    \
+                    ' and stores it as <output file name>. Shreds <temp file name>.\n\n'
 
 
 def print_list_of_contacts():
@@ -1681,6 +1693,7 @@ def group_create(groupName, newMembers=[]):
     if os.path.isfile('g.' + groupName + '.tfc'):
         if not (raw_input('Group \'' + groupName + '\' already exists. Type YES to overwrite: ') == 'YES'):
             return False
+        os.system('clear')
 
     with open('g.' + groupName + '.tfc', 'w+') as file:
         if newMembers:
@@ -1783,7 +1796,7 @@ def group_rm_member(groupName, rmList):
             print 'Nothing removed from group \'' + groupName + '\':'
 
         if unknown:
-            print '\n\nUnknown contacts:'
+            print '\n\nUnknown contacts not removed from group \'' + groupName + '\':'
             for member in unknown:
                 print '   ' + member
 
@@ -1814,7 +1827,7 @@ def get_group_list(output):
             gFileNames.append(file[2:][:-4])
 
     if not gFileNames and output:
-        print '\nThere are currently no groups.\n'
+        print '\nThere are currently no groups.'
 
     return gFileNames
 
@@ -1831,6 +1844,7 @@ def get_group_members(groupName, output=True):
             groupList.append(member.strip('\n'))
 
         if not groupList and output:
+            os.system('clear')
             print '\nGroup is empty. Add contacts to group with command\n   /group add <group name> <xmpp>\n'
 
         return groupList
@@ -1920,7 +1934,8 @@ while True:
     if userInput in ['/group', '/group ']:
 
         if selectedGroup == '':
-            print '\nNo group selected\n'
+            os.system('clear')
+            print 'No group selected\n'
             continue
 
         else:
@@ -1928,7 +1943,7 @@ while True:
 
         if membersOfGroup:
             os.system('clear')
-            print '\nMembers of selected group \'' + selectedGroup + '\':'
+            print 'Members of selected group \'' + selectedGroup + '\':'
             for member in membersOfGroup:
                 print '   ' + member
             print ''
@@ -1940,9 +1955,11 @@ while True:
         groupFileList = get_group_list(True)
         if groupFileList:
             os.system('clear')
-            print 'Available groups are: '
+            print 'Current groups and their members: '
             for group in groupFileList:
                 print '   ' + group
+                for member in get_group_members(group):
+                    print '     - ' + member
         print ''
         continue
 
@@ -1963,10 +1980,12 @@ while True:
         # Check that group name is not reserved.
         newGroupName = userInput.split(' ')[2]
         if newGroupName == '':
-            print '\nError: Group name can\'t be empty.\n'
+            os.system('clear')
+            print 'Error: Group name can\'t be empty.\n'
             continue
         if newGroupName in reservedNames:
-            print '\nError: Group name can\'t be command, nick or XMPP-address.\n'
+            os.system('clear')
+            print 'Error: Group name can\'t be command, nick or XMPP-address.\n'
             continue
 
 
@@ -1990,7 +2009,7 @@ while True:
         if group_create(newGroupName, members):
 
             if members:
-                print '\nCreated group \'' + newGroupName + '\' with following members:'
+                print 'Created group \'' + newGroupName + '\' with following members:'
                 for member in members:
                     print '   ' + member
                 print ''
@@ -2331,9 +2350,10 @@ while True:
             time.sleep(0.4)
             continue
 
-    if userInput.startswith('/') and not userInput.startswith('/file '):
+
+    if userInput.startswith('m/'):
         os.system('clear')
-        print '\nError: Unknown command \'' + userInput + '\'\n'
+        print '\nError: Unknown command \'' + userInput[1:] + '\'\n'
         continue
 
 

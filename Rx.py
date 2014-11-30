@@ -1527,8 +1527,7 @@ try:
                         command       = depadding(paddedCommand)
 
                     except ValueError:
-                            if logTamperingEvent:
-                                packet_anomality('MAC', 'command')
+                            packet_anomality('MAC', 'command')
                             continue
                     except TypeError:
                             packet_anomality('MAC', 'command')
@@ -1639,13 +1638,11 @@ try:
                         decryptedPacket = depadding(decryptedPacket)
 
                     except ValueError:
-                            if logTamperingEvent:
-                                packet_anomality('MAC', 'message')
+                            packet_anomality('MAC', 'message')
                             continue
 
                     except TypeError:
-                            if logTamperingEvent:
-                                packet_anomality('MAC', 'message')
+                            packet_anomality('MAC', 'message')
                             continue
 
 

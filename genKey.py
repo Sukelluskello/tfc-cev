@@ -35,10 +35,11 @@ for more details. For a copy of the GNU General Public License, see
 #                             CONFIGURING                            #
 ######################################################################
 
-useDevRandom    = False # Higher quality entropy, interruptable, thus slower.
+useDevRandom    = True  # Higher quality entropy, interruptable, thus slower.
 
-shredIterations = 3    # Number of passes secure-delete overwrites temporary keyfiles.
+shredIterations = 3     # Number of passes secure-delete overwrites temporary keyfiles.
 
+createCopies    = False # Create copies of key for your and recipient's RxM.
 
 
 
@@ -46,20 +47,20 @@ shredIterations = 3    # Number of passes secure-delete overwrites temporary key
 #                              ARGUMENTS                             #
 ######################################################################
 
-# Initial Values, do not edit
-HWRNGEntropy        = False
-kernelEntropy       = False
-mixedEntropy        = False
-defOFile            = False
+# Initial Values, do not edit.
+HWRNGEntropy    = False
+kernelEntropy   = False
+mixedEntropy    = False
+defOFile        = False
 
 
 
 def showHelp():
-    print '\nUsage: python genKey.py [OPTION]... OUTPUT_FILE'
-    print '  -k' + 15 * ' ' + 'Use /dev/(u)random as entropy source'
-    print '  -h' + 15 * ' ' + 'Use HW RNG as entropy source'
-    print '  -b' + 15 * ' ' + 'Use HW RNG as source and XOR it with equal amount\n' \
-                 + 19 * ' ' + 'of data from /dev/(u)random (Most secure option)'
+    print '\nUsage: python genKey.py [OPTIONS]... OUTPUT_FILE\n\n'                         \
+    '  -k, --kernel'    + 7  * ' ' + 'Use /dev/(u)random as entropy source.\n'             \
+    '  -h, --hwrng'     + 8  * ' ' + 'Use HWRNG as entropy source.\n'                     \
+    '  -x, --mixed'     + 8  * ' ' + 'Use HWRNG as source and XOR it with equal amount\n' \
+                        + 21 * ' ' + 'of entropy from kernel. (Most secure option).\n\n'
     exit()
 
 
@@ -69,39 +70,51 @@ try:
 
 except IndexError:
     showHelp()
-    exit()
+
 
 try:
     outputFile = str(sys.argv[2])
+
 except IndexError:
     defOFile = True
 
-if command == '-k':
+
+if '-k' in command or '--kernel' in command:
     kernelEntropy   = True
     if useDevRandom:
-        mode = 'Kernel entropy (/dev/random)'
+        mode        = 'Kernel entropy (/dev/random)'
     else:
-        mode = 'Kernel entropy (/dev/urandom)'
+        mode        = 'Kernel entropy (/dev/urandom)'
 
 
-if command == '-h':
+if '-h' in command or '--hwnrg' in command:
     HWRNGEntropy    = True
-    mode = 'HWRNG entropy'
+    mode            = 'HWRNG entropy'
 
 
-if command == '-b':
+if '-x' in command or '--mixed' in command:
     mixedEntropy    = True
+
     if useDevRandom:
-        mode = 'Mixed entropy (HWRNG XOR /dev/random)'
+        mode        = 'Mixed entropy (HWRNG XOR /dev/random)'
     else:
-        mode = 'Mixed entropy (HWRNG XOR /dev/urandom)'
+        mode        = 'Mixed entropy (HWRNG XOR /dev/urandom)'
 
 
-if (command != '-k') and (command != '-h') and (command != '-b'):
+# Check that only one mode of operation is selected.
+selModes = 0
+if kernelEntropy:
+    selModes += 1
+if HWRNGEntropy:
+    selModes += 1
+if mixedEntropy:
+    selModes += 1
+
+if selModes != 1:
     showHelp()
-    exit()
 
 os.chdir(sys.path[0])
+
 
 
 ######################################################################
@@ -513,16 +526,26 @@ def get_hwrng_entropy(byteLen):
     entropy = ''
     while len(entropy) < byteLen:
 
-        print 'Sampling randomness from HW RNG device...\nWait at least one minute before ending with Ctrl + C\n'
+        print 'Sampling randomness from HWRNG device...\nWait at least one minute before ending with Ctrl + C\n'
         try:
             subprocess.Popen('sudo ./getEntropy', shell=True).wait()
         except KeyboardInterrupt:
             pass
 
-        print '\nVN whitening, round 1 / 2'
+    os.system('clear')
+    print '\nTFC ' + version + ' || Key generator || Mode: ' + mode + '\n\n'
+    if defOFile:
+        print 'Specified output file: ' + outputFile + '\n'
+    print 'Sampling randomness from HWRNG device. End with Ctrl + C\nEnded by user.'
+
+
+
+
+
+        print '\nApplying VN whitening, round 1 / 2'
         subprocess.Popen('cat ' + 'HWRNGEntropy' + ' | ./deskew > ' + 'tmpDeskewed', shell=True).wait()
 
-        print 'VN whitening, round 2 / 2'
+        print 'Done.\n\nVN whitening, round 2 / 2'
         subprocess.Popen('cat ' + 'tmpDeskewed'  + ' | ./deskew > ' + 'deskewed',    shell=True).wait()
 
         print 'Done.'
@@ -630,12 +653,13 @@ with open(outputFile, 'w+') as file:
 #               MAKE COPIES OF KEYFILE                  #
 #########################################################
 
-print 'Done.\n\n\nCreating copies of key...'
-subprocess.Popen('cp ' + outputFile + ' me.' + outputFile, shell=True).wait()
-subprocess.Popen('cp ' + outputFile + ' rx.' + outputFile + '_for_recipient', shell=True).wait()
+if createCopies:
+    print '\nCreating copies of key...'
+    subprocess.Popen('cp ' + outputFile + ' me.' + outputFile, shell=True).wait()
+    subprocess.Popen('cp ' + outputFile + ' rx.' + outputFile + '_for_recipient', shell=True).wait()
 
 
-print 'Done.\n\n\nPSK generation successful. Exiting.\n\n'
+print 'Done.\n\n\nPSK generation successful.\nExiting.\n\n'
 exit()
 
 

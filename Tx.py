@@ -455,26 +455,26 @@ def keccak_256(hashInput):
 
 def keccak_encrypt(message, HexKey):
 
-    #CTR mode, no authentication.
+    # CTR mode, no authentication.
 
     # Add padding to plainText, (256-bit block-size).
-    length    = 32 - (len(message) % 32)
-    message  += length * chr(length)
+    length     = 32 - (len(message) % 32)
+    message   += length * chr(length)
 
     # Convert hexadecimal key to binary data.
-    key       = binascii.unhexlify(HexKey)
+    key        = binascii.unhexlify(HexKey)
 
     # Generate 256-bit nonce.
-    nonce     = os.urandom(32)
+    nonce      = os.urandom(32)
 
     # Generate 512-bit IV.
-    iv        = (key + nonce)
+    iv         = (key + nonce)
 
     # Sponge function takes 512-bit IV, squeezes out 256 bit keystream block #1.
-    step      = keccak_256(iv)
+    step       = keccak_256(iv)
 
-    i         = 0
-    keystream = ''
+    i          = 0
+    keystream  = ''
 
     # For n-byte message, n/32 additional rounds is needed to generate proper length keystream.
     while i < (len(message) / 32):
@@ -482,7 +482,7 @@ def keccak_encrypt(message, HexKey):
         step       = keccak_256(key + step)
         i         += 1
 
-    # Convert key from hex format to binary data.
+    # Convert key from hex format to binary.
     keystreamBIN = binascii.unhexlify(keystream)
 
     # XOR keystream with plaintext to acquire ciphertext.
@@ -745,7 +745,7 @@ def self_test():
 
         T = Twofish(k)
         if not T.encrypt(p) == c or not T.decrypt(c) == p:
-            exit_with_msg('CRITICAL ERROR! Twofish library is corrupted')
+            exit_with_msg('CRITICAL ERROR! Twofish library is corrupted.')
 
 # Perform Twofish library self-test.
 self_test()
@@ -805,8 +805,7 @@ def twofish_encrypt(plainText, HexKey):
     if len(plainText) == len(keystream):
         ciphertext = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(plainText, keystream))
     else:
-        print '\nCRITICAL ERROR! Twofish plaintext - keystream length mismatch. Exiting.'
-        exit()
+        exit_with_msg('CRITICAL ERROR! Twofish plaintext - keystream length mismatch.')
 
     return nonce + ciphertext
 
@@ -873,12 +872,12 @@ except ImportError:
 
 def write_nonce(nonce):
     with open('usedNonces.tfc', 'a+') as file:
-        file.write( b64e(nonce) + '\n' )
+        file.write(base64_encode(nonce) + '\n')
 
 
 
 def nonce_is_blacklisted(nonce):
-    b64Nonce = b64e(nonce)
+    b64Nonce = base64_encode(nonce)
     try:
         with open('usedNonces.tfc', 'r') as file:
             for line in file:
@@ -936,8 +935,8 @@ def get_keyset(xmpp, output=True):
             key = line.strip('\n')
 
             # Verify keys in keyfile have proper hex-format.
-            validChars = ['0','1','2','3','4','5','6','7','8','9','A',
-                          'B','C','D','E','F','a','b','c','d','e','f']
+            validChars = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A',
+                          'B', 'C', 'D', 'E', 'F', 'a', 'b', 'c', 'd', 'e', 'f']
 
             for char in key:
                 if not char in validChars:
@@ -1038,7 +1037,7 @@ def write_nick(xmpp, nick):
     try:
         contacts = []
 
-        with open ('txc.tfc', 'r') as file:
+        with open('txc.tfc', 'r') as file:
             csvData = csv.reader(file)
 
             for row in csvData:
@@ -1046,7 +1045,7 @@ def write_nick(xmpp, nick):
 
         nickChanged = False
 
-        for i in range( len(contacts) ):
+        for i in range(len(contacts)):
             if contacts[i][1] == xmpp:
                 contacts[i][0] = nick
                 nickChanged = True
@@ -1077,7 +1076,7 @@ def get_nick(xmpp):
             for row in csvData:
                 contacts.append(row)
 
-        for i in range( len(contacts) ):
+        for i in range(len(contacts)):
             if contacts[i][1] == xmpp:
                 nick = contacts[i][0]
                 return nick
@@ -1107,7 +1106,7 @@ def write_keyID(xmpp, keyID):
                 keyIDChanged   = True
 
         if not keyIDChanged:
-            exit_with_msg('ERROR! Could not find ' + xmpp + ' from txc.tfc.')
+            exit_with_msg('ERROR! Could not find XMPP\n' + xmpp + ' from txc.tfc.')
 
         with open('txc.tfc', 'w') as file:
             writer = csv.writer(file)
@@ -1145,10 +1144,10 @@ def get_keyID(xmpp):
         if keyID > 0:
             return keyID
         else:
-            exit_with_msg('ERROR! Failed to load valid keyID for ' + xmpp + '.')
+            exit_with_msg('ERROR! Failed to load valid keyID for XMPP\n' + xmpp + '.')
 
     except ValueError:
-        exit_with_msg('ERROR! Failed to load valid keyID for ' + xmpp + '.')
+        exit_with_msg('ERROR! Failed to load valid keyID for XMPP\n' + xmpp + '.')
 
     except IOError:
         exit_with_msg('ERROR! txc.tfc could not be loaded. Exiting.')
@@ -1282,7 +1281,7 @@ def chk_pkgSize():
 #                           MSG PROCESSING                           #
 ######################################################################
 
-def b64e(content):
+def base64_encode(content):
     import base64
     return base64.b64encode(content)
 
@@ -1374,7 +1373,7 @@ def long_msg_process(userInput, xmpp):
             paddedMsg = padding(packet)
             ctWithTag = encrypt(xmpp, paddedMsg)
 
-            encoded   = b64e(ctWithTag)
+            encoded   = base64_encode(ctWithTag)
             checksum  = crc32(encoded + '|' + str(keyID))
 
             write_keyID(xmpp, keyID + 1)
@@ -1404,7 +1403,7 @@ def long_msg_process(userInput, xmpp):
             paddedMsg = padding(cancelMsg)
             ctWithTag = encrypt(xmpp, paddedMsg)
 
-            encoded   = b64e(ctWithTag)
+            encoded   = base64_encode(ctWithTag)
             checksum  = crc32(encoded + '|' + str(keyID))
 
             write_keyID(xmpp, keyID + 1)
@@ -1426,7 +1425,7 @@ def short_msg_process(plaintext, xmpp):
     paddedMsg = padding('s' + plaintext) # 's' stands for single packet messages.
     ctWithTag = encrypt(xmpp, paddedMsg)
 
-    encoded  = b64e(ctWithTag)
+    encoded  = base64_encode(ctWithTag)
     checksum = crc32(encoded + '|' + str(keyID))
 
     write_keyID(xmpp, keyID + 1)
@@ -1441,7 +1440,7 @@ def cmd_msg_process(command):
     paddedCmd = padding(command)
     ctWithTag = encrypt('tx.local', paddedCmd)
 
-    encoded   = b64e(ctWithTag)
+    encoded   = base64_encode(ctWithTag)
     checksum  = crc32(encoded + '|' + str(keyID))
 
     write_keyID('tx.local', keyID + 1)
@@ -2386,7 +2385,7 @@ while True:
 
             else:
                 short_msg_process(userInput, xmpp)
-
+            time.sleep(0.1)
         time.sleep(0.1)
         print ''
 

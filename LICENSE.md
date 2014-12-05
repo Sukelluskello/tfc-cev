@@ -10,7 +10,7 @@ and are published used under GNU free license and used in this document accordin
 
 Both the whitepaper and manual are released under GNU Free Documentation License 1.3
 
-Tx.py, NH.py, In.py Rx.py, tfcInstaller.py and genKey.py are part of the TFC application, which
+Tx.py, NH.py, Rx.py, tfcCEVinstaller.py and genKey.py are part of the TFC application, which
 is free software: You can redistribute it and/or modify it under the terms of the GNU
 General Public License as published by the Free Software Foundation, either version 3 of
 the License, or (at your option) any later version. TFC is distributed in the hope that

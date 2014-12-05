@@ -51,7 +51,7 @@ displayTime        = True
 
 logTimeStampFmt    = '%Y-%m-%d / %H:%M:%S'
 displayTimeFmt     = '%H:%M'
-kfOWIterations     = 3
+keyOWIterations    = 3
 
 localTesting       = False
 
@@ -1385,7 +1385,7 @@ def store_file(preName, fileName):
         subprocess.Popen('base64 -d f.' + preName + '.tfc > ' + fileName, shell=True).wait()
         print '\nStored tmp file \'f.' + preName + '.tfc\' as \'' + fileName + '\'.'
 
-        subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u f.' + preName + '.tfc', shell=True).wait()
+        subprocess.Popen('shred -n ' + str(keyOWIterations) + ' -z -u f.' + preName + '.tfc', shell=True).wait()
         print 'Temporary file \'f.' + preName + '.tfc\' has been overwritten.\n'
 
         disp_opsec_warning()
@@ -1393,10 +1393,8 @@ def store_file(preName, fileName):
     else:
         os.system('clear')
 
-        subprocess.Popen('shred -n ' + str(kfOWIterations) + ' -z -u f.' + preName + '.tfc', shell=True).wait()
+        subprocess.Popen('shred -n ' + str(keyOWIterations) + ' -z -u f.' + preName + '.tfc', shell=True).wait()
         print 'Temporary file \'f.' + preName + '.tfc\' was rejected and overwritten.\n'
-
-
 
 
 

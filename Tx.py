@@ -1576,6 +1576,7 @@ def print_help():
                   ' and stores it as <output file name>. Shreds <temp file name>.\n\n'
 
 
+
 def print_list_of_contacts():
     ttyW        = get_terminal_width()
     columnList  = ['XMPP-address', 'ID', 'Nick']

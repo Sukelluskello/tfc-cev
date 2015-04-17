@@ -15,7 +15,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* This version is suitable for TFC CEV 0.4.13.
+/* This version is suitable for TFC CEV 0.5.4.
  *
  * Original source code is available at
  * http://holdenc.altervista.org/avalanche/downloads/avalanche-test-utils.tgz

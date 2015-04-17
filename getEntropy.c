@@ -24,7 +24,7 @@
 /* This version (getEntropy.c) is modified from avalanche_hour.c
  * by Giorgio Vazzana to be used in TFC suite: github.com/maqp/tfc/
 
- * This version is suitable for TFC CEV 0.4.13.
+ * This version is suitable for TFC CEV 0.5.4.
 
  * This version uses faster sampling speed.
 
@@ -55,8 +55,8 @@
 #define BLOCK_SIZE         (256)
 
 // GPIO setup macros. Always use GPIO_IN(x) before using GPIO_OUT(x) or GPIO_ALT(x,y)
-#define GPIO_IN(g)    *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
-#define GPIO_OUT(g)   *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
+#define GPIO_IN(g)    *(gpio+((g)/10))   &= ~(7<<(((g)%10)*3))
+#define GPIO_OUT(g)   *(gpio+((g)/10))   |=  (1<<(((g)%10)*3))
 #define GPIO_ALT(g,a) *(gpio+(((g)/10))) |= (((a)<=3?(a)+4:(a)==4?3:2)<<(((g)%10)*3))
 
 #define GPIO_SET(g) *(gpio+7)  = 1<<(g)  // sets   bits which are 1, ignores bits which are 0
@@ -77,7 +77,7 @@ void signal_handler(int sig)
 
 void setup_io()
 {
-	// open /dev/mem
+	// Open /dev/mem
 	mem_fd = open("/dev/mem", O_RDWR|O_SYNC);
 	if (mem_fd == -1) {
 		perror("Cannot open /dev/mem");
@@ -100,7 +100,7 @@ void setup_io()
 	GPIO_IN(LED);
 }
 
-// Release GPIO memory region
+// Release GPIO memory region.
 
 void close_io()
 {
@@ -113,7 +113,7 @@ void close_io()
 		exit(1);
 	}
 
-	// close /dev/mem
+	// Close /dev/mem
 	ret = close(mem_fd);
 	if (ret == -1) {
 		perror("Cannot close /dev/mem");
@@ -129,7 +129,7 @@ int main(int argc, char *argv[])
 	int iterate;
 	int increasethis = 0;
 
-	// Setup gpio pointer for direct register access
+	// Setup GPIO pointer for direct register access.
 	setup_io();
 
 	samples = calloc(NSAMPLES, sizeof(*samples));
@@ -148,7 +148,7 @@ int main(int argc, char *argv[])
 			bit = GPIO_LEV(AVALANCHE_IN);
 
 		// Useless iterating that only causes slight sleep time before next sample is read.
-		for (iterate = 0; iterate < 30000; iterate++) {
+		for (iterate = 0; iterate < 50000; iterate++) {
 			increasethis++;
 			}
 		increasethis = 0;

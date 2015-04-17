@@ -1,0 +1,308 @@
+Tinfoil chat 0.5.4 update log
+
+    Documentation:
+
+        Whitepaper
+            New pictures for chapter providing background.
+            Added more detailed analysis on leaks.
+            Added circuit for data diode with the flip flop circuit.
+            Added picture of data diode with the circuit.
+            Added TFC CEV properties to abstract
+            Added Added CEV to chapter on ciphers and self audit.
+                       
+        Manual
+            Upgraded according to updates on software.
+
+    SOFTWARE:
+        COMMON
+            SECURITY:
+                Updated Keccak Python version from 2.0 to 3.0 
+                which has new padding scheme.
+
+                Every function now uses isistance() input type validation.
+
+                Every safety-critical error now 
+                causes a descriptive graceful exit.
+
+            AUDITABILITY
+                Added docstrings for most functions with descriptions on 
+                functionality and parameters.
+                
+                Improved structure and readability of 
+                source code in general, removed typos etc.
+
+        Tx.py 
+            SECURITY
+                COMMON
+                    Added threads that send constant stream of noise commands and
+                    messages randomly (1:1 ratio) to hide metadata about when 
+                    communication or command sending is actually taking place. 
+                    The feature will exhaust OTP keys rapidly so use of CEV 
+                    version is recommened. Some XMPP servers might ban users for
+                    'spamming', so using low repeat rate is recommened.
+                    
+                    RandomSleep variable also affects 
+                    the constant transmission setting.
+
+                    For now, paste mode, contact changing and multicasting of
+                    messages is disabled during constant transmission to protect
+                    users against timing attacks against SW.
+
+                CEV
+                    Added self test functions for Keccak hash function, 
+                    Keccak CTR, XSalsa20, Twofish CTR and AES-GCM
+
+                    Fixed binascii.hex() NameError in cases where import of 
+                    Crypto.Random.random fails: AES GCM nonce (512 bits) is 
+                    now generated with os.urandom from /dev/urandom.
+        
+                    Removed code included in library of Twofish and Salsa20 
+                    encryption functions.
+                    
+                    Added double assertion for Twofish CTR that checks each 
+                    IV used was unique.
+                    
+                    Changed Twofish IV generation from XORing nonce with hash
+                    of counter to XORing nonce with zfilled counter which is
+                    closer to standard.
+
+                OTP
+                    Added self test functions for Keccak hash funcion, one-time
+                    pad and one-time MAC funtion.
+                    
+                    Fixed an infinitesimally unlikely vulnerability where after
+                    reducing int('one time key') % M521, either of the MAC keys
+                    would be zero and thus vulnerable. In the event this would 
+                    occur (probability = 2/2^521), Tx.py will now exit.
+                    
+
+                    When changing keys, checks that keys have been shredded and
+                    new keyfile is in place before reporting on successful key change.
+
+            STABILITY
+                Defined proper values for packet max and min size to prevent errors.
+
+            AUDITABILITY
+                Fixed the confusing xmpp variable to always
+                mean the XMPP-address, without tx. prefixes.
+                
+                Improved code structure significantly: main loop is
+                now much shorter and functions are more autonomic.
+
+            USABILITY
+                COMMON
+                    COMMANDS
+                        /group rm without specified XMPP-addresses
+                         now overwrites and deletes group file.
+
+                        /group <group name> now shows specified group members.
+
+                        /msg is used to select group.
+
+                        /group add <groupname> <xmpp> now asks to
+                        create new group if not one already exists.
+
+                        /store list command now asks RxM to
+                        display list of tmp files it has.
+
+                        /about provides clickable URLs (for local
+                         testing as TCB has no network connectivity.)
+
+                    OTHERS
+                        User can now select contact by typing the recipient
+                        XMPP to contact selection menu, tabfill supported.
+                        
+                        Automatically removes placement instruction for all tx.xmpp.e files.
+
+                        Pressing Enter instead of giving nick now parses
+                        the name side from XMPP-address and capitalizes it.
+        Rx.py
+            SECURITY
+                COMMON
+                    Added self test functions for Keccak hash function,
+                     Keccak CTR, XSalsa20, Twofish CTR and AES-GCM
+
+                    Fixed failure to create proper log on replayed packets.	
+
+
+                CEV                    
+                    Changed Twofish IV generation from XORing nonce with
+                    hash of counter to XORing nonce with zfilled counter
+                    which is closer to standard.
+
+                    Removed code included in library of Twofish and Salsa20
+                    encryption functions.
+
+                    Added double assertion for Twofish CTR
+                    that checks each IV used was unique.
+
+        	        Added an option to manually accept packets with sudden large
+        	        increase in keyID to prevent crashing Rx.py with DoS attack.
+        	        When rejected, Rx.py makes an automatic event log to syslog.tfc.
+        	        User can also set the value of how large difference is required to
+        	        trigger this. For constant trnsmission mode, this should be disabled.
+
+                OTP
+                    Added self test functions for Keccak hash funcion, one-time pad,
+                    one-time MAC and constant time MAC comparison function.
+
+
+            STABILITY
+                COMMON
+                    Fixed chrash where missing rx.xmpp.e causes error in key ID loading.
+            
+                    Added clean exit when sending KeyboardInterrupt during contact nick input.
+                    
+                    Changed UnboudLocalError to graceful exit when
+                    there is no me.xmpp.e file for message sent by Tx.py.
+                
+                    Fixed issue where malformed base64 padding caused
+                    TypeError and crash. Tampering event is now created.
+
+                    Fixed issue where missing rx.xmpp.e caused get_key_id() to
+                    unnecessarily gracefully exit Rx.py.  Rx.py now prints a
+                    warning when it can't find keyfile or key ID in rxc.tfc.
+
+                    Removed double warning from MAC failure.
+
+                    Fixed whitespace after time stamp in syslog.tfc
+
+                CEV
+                    Fixed issue where MAC fail crashes on Twofish input parameter type error.
+
+            AUDITABILITY
+                    Moved handling of encrypted commands to a
+                    function reducing the length of main loop.
+
+
+            USABILITY
+                COMMON
+                    Warn about missing keyfile pair.
+                    Automatically removes placement instruction
+                    for all me.xmpp.e and rx.xmpp.e files.
+
+                    Pressing Enter instead of giving nick now parses
+                    the name side from XMPP-address and capitalizes it.
+
+                    Swapped Nick storing and loading from rx.xmpp.e to
+                    me.xmpp.e so user can store the contact's nickname
+                    before receiving the rx.xmpp.e keyfile: The latter
+                    keyfile will be added automatically to rxc.tfc.
+
+                    Rx.py now reports on encoded files not yet stored
+                    when file is rejected or improper tmp file name is provided.
+                        (User can query Rx.py for list of peding
+                        tmp files with command '/store list'.)
+
+                    Automatically removes placement instruction
+                    for all me.xmpp.e and rx.xmpp.e files.
+
+                CEV
+                    Hides noise messages and commands
+                    sent by Tx.py programs automatically.
+
+                OTP
+                    Fixed issue in Rx.py OTP where adversary who increases keyID 
+                    nubmer to very large number causes an OverflowError and crash.           
+
+        NH.py
+            USABILITY
+                NH.py now let's the user know which account TFC uses to send
+                messages. User can change the account by dragging it as the
+                topmost account in 'Manage Accounts' section in Pidgin.
+             
+        genKey.py:
+    
+            SECURITY:
+
+                OTP
+                    Automatically analyses whitened entropy with Ent and does graceful 
+                    exit if obtained key data does not have high enough enough entropy
+                    (7.85 bits / byte by default)
+                
+                CEV
+                    Increased sampling time from 30000 to 50000.
+
+            USABILITY:    
+
+                User can now initialize software with
+                    genkey [FLAG] [CONTACT_XMPP] [USER_XMPP]
+                
+                    if user specifies both XMPP-addresses, genKey generates a triplet
+                    of key for both TxM and RxM of user and RxM of contact.
+                
+                    If user does not specify one or either, genKey asks user to input
+                    them manually (interactive) mode.
+                
+                When key generation generates one key or triplet:
+                    tx.xmpp.e is given instruction and moved to move_to_TxM folder
+                    unless Tx.py exists in same directory as genKey.py.
+
+                    me.xmpp.e is given instruction and moved to move_to_RxM folder
+                    unless Rx.py exists in same directory as genKey.py.
+
+                    rx.xmpp.e is given instruction and it is moved to contact_keys folder.
+                
+                Tx.py and Rx.py automatically remove instructions from file names,
+                user does not have to do that.
+
+                Giving the output file name 'l' or {,tx.,rx.}local{,.e} now asks
+                if user wants to generate tx.local.e and rx.local.e files as a pair.
+
+                    tx.local.e is given instruction and moved to move_to_TxM
+                    folder unless Tx.py exists in same directory as genKey.py.
+
+                    rx.local.e is given instruction and moved to move_to_RxM
+                    folder unless Rx.py exists in same directory as genKey.py.
+
+                    Initilizing software with command 'python genkey [FLAG] 'l'
+                    or {,tx.,rx.}local{,.e} also switches to local.
+
+                Setting boolean 'instructions' to False in genKey.py
+                disables generation of all instructions.
+        
+
+        tfc{CEV,OTP}installer.py:
+            SECURITY:
+                Installer is now provided with preinstalled SHA512 hashes of
+                 latest version that are used to verify integrity of files.
+                
+                Created an RSA public key to sign the installer files,
+                the public key is available at
+
+                    https://cs.helsinki.fi/u/oottela/TFC-pub.key
+                    https://pgp.mit.edu/pks/lookup?op=get&search=0x4064F05A4D17DE97
+
+                Since remote/physical RSA private key jacking is an
+                issue, this side needs some transparency:
+                
+                    1. The private key is handled only in waterfall secured computer,
+                       protected by a big fucking pile of paranoid cascading crypto
+                       and security through obscurity.
+
+                    2. Keys are moved via data diode to RxM like environment, from
+                       which the signature is read on screen in QR format.
+                    
+                       This will slow down the rate at which updates are publised
+                       excluding cases where a vulnerability has been found.
+
+                                                   BUT
+
+                    That's a lot of work for nothing, as there is NO high assurance
+                    way for You to verify the NSA didn't MITM your TLS-encrypted
+                    connection to keyserver and change the public signing key on fly
+                    to one the private pair of which was used to sign tampered files.
+                    So if you can, look me up, verify the SHA2-256 hash of public key
+                    (have one ready) with me face to face.
+                    
+                    Much preferrably, read and audit the code for yourself,
+                    let me know if you find anything.
+                
+
+            AUDITABILITY
+                Created functions for each installation subroutine.
+                
+
+            USABILITY
+                Improved instructions that are provided.
+

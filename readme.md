@@ -1,78 +1,46 @@
-Project Description:
---------------------
+<img align="right" src="https://cs.helsinki.fi/u/oottela/tfclogo.png" style="position: relative; top: 0; left: 0;">
+ 
 
-TFC-CEV is a high assurance encryption plugin for Pidgin IM client that combines free and open source hardware and software. Secure by design implementation provides a no-compromise layer that addresses automatable attacks used by intelligence agencies for mass surveillance:
+###Tinfoil Chat CEV
 
-1. Computationally secure **cascading** encryption ensures privacy and integrity of communication.
 
-2. Hardware random number generator provides truly random entropy for encryption keys.
+TFC-CEV is a high assurance encryption plugin for Pidgin IM client, built on free and open source hardware and software. Secure by design implementation protects data in transit against [passive](https://en.wikipedia.org/wiki/Upstream_collection) and [active](https://en.wikipedia.org/wiki/Man-in-the-middle_attack) attacks as well as the end points against untasked targeted attacks practiced by TLAs such as the [NSA](https://firstlook.org/theintercept/2014/03/12/nsa-plans-infect-millions-computers-malware/), [GCHQ](http://www.wired.co.uk/news/archive/2014-03/13/nsa-turbine) and [BKA](http://ccc.de/en/updates/2011/staatstrojaner).
 
-3. Data diodes provide hardware enforced unidirectional gateways that prevent exfiltration (theft) of plaintexts and encryption keys.
+**Encryption** is done with cascaded set of symmetric ciphers: Keccak-CTR, XSalsa20, Twofish-CTR and AES-GCM have internally different structures: Attacker neeeds to have cyptanalytic attacks against all of them to decrypt messages. [Not secure enough?](https://github.com/maqp/tfc)
 
-This project is an official fork of Tinfoil Chat (TFC-OTP), which uses information theoretically secure encryption and authentication.
-Apart from different security claim, some commands and differences in UI, the whitepaper and manual are applicable for TFC-CEV:
+**Keys** are generated with an open circuit design hardware random number generator that feeds truly random (read: back-door free) entropy when generating the four independent 256-bit symmetric keys. Perfect forward secrecy is obtained by rotating keys through Keccak (SHA3) hash function after use. 
+
+**Endpoints** are secured by separating encryption and decryption on two TCB-devides that interact with the network client through data-diode enforced unidirectional channels. Removing the bidirectional channel prevents exfiltration of keys and plaintexts with remote attacks regardless of existing zero-day vulnerabilities in the OS of TCBs.
+
+###How it works
+
+![](https://cs.helsinki.fi/u/oottela/tfc_graph.png)
+
+In TFC, Alice enters her message into Tx.py running on her Transmitter Module (TxM), a TCB separated from network. Tx.py encrypts the message and signs the ciphertext. TxM then relays the packet to Network Handler (NH) through RS-232 interface and a data diode.
+
+The NH.py script running on Alice's NH listens to packets from TxM's serial port, and forwards message to Pidgin via dbus IPC. A copy of the packet is also sent to her Receiver Module (RxM, another TCB separated from network) through RS-232 interface and a data diode, where the the ciphertext is authenticated, displayed and optionally also logged.
+
+Pidgin sends the packet either directly or through Tor network to IM server, that then forwards it directly (or again through Tor) to Bob.
+
+On the Bob's NH, the script NH.py receives Alice's packet from Pidgin via dbus and forwards it through RS-232 interface and another data diode to his RxM, where the ciphertext is authenticated, decrypted, displayed and optionally also logged. When the Bob responds, he will send the message using his TxM and in the end Alice reads the message from her RxM.
+
+
+###Why keys can not be exfiltrated
+
+1. The payload can reach RxM, but is unable to transmit anything back to NH.
+
+2. The payload never reaches TxM since the device can only transmit.
+
+3. The NH is assumed to be compromised, but unencrypted data never touches it.
+
+![](https://cs.helsinki.fi/u/oottela/tfc_attacks.png)
+
+The optical gap of the data diode (below) physically blocks back channels.
+
+<img  src="https://cs.helsinki.fi/u/oottela/data_diode.png" align="center" width="74%" height="74%"/>
+
+###Detailed information
 
 Whitepaper: https://cs.helsinki.fi/u/oottela/tfc.pdf
 
 Manual: https://cs.helsinki.fi/u/oottela/tfc-manual.pdf
-
-
-TFC-CEV Features
-----------------
-
-**Encryption keys**
-
-TFC-CEV uses a set of four independent hexadecimal keys. Each key has a length of 64 (256 bit strength).
-
-**Please note that each key must be preshared face to face (e.g. on USB-thumb drive or on a piece of paper) between contacts. This is unfortunately the only MITM attack-free way. Never use insecure mediums such as telephone, email, or even end-to-end encrypted systems (PGP/OTR/ZRTP)! Each of these systems have lower security rating than TFC.**
-
-Please note that reduced size of encryption key compared to TFC-OTP increases the risk, where if a malware compromises the TxM during OS installation, the keys might be exfiltrated along 1 to 128 packets.
-
-Keyfiles are named in the same fashion as TFC-OTP; Do not mix files. Keep each version in their dedicated folder.
-
-**Physical security**
-
-TFC provides vastly more secure environment compared to traditional systems. It is the only one resistant against key exfiltration via 0-day exploits. Only way to steal encryption keys is by breaking into user's house, office etc. It's highly recommened to use a full-disc-encrypted device to store software and keys, and to operate the programs only with liveCD environment. Amnesic Linux distribution protects against persistent software keyloggers and on-screen keyboard against physical ones.
-
-**Perfect forward secrecy**
-
-This version of TFC provides perfect forward secrecy. This means
-
-   a) All messages sent **before** physical key compromise remain private, unless recipient logs them.
-
-   b) All messages sent **after** physical key compromise **can be decrypted by the adversary**.
-
-
-**Deniablity**
-
-This version of TFC provides limited deniability: Messages are not digitally signed, thus the recipient can't prove that it wasn't (s)he who crafted the messages. Due to 'loopbackless' nature of TFC, RxM of Bob can't inform TxM of Alice when it has received the message. Therefore, publishing MAC keys in similar fashion to OTR would destroy integrity of messages, since adversary might withold sent messages until it has received the MAC key; The adversary could then succeed in performing an existential forgery.
-
-
-**Installation**
-
-Please install the tool using tfcCEVinstaller.py by running following commands in terminal:
-
-1. wget https://raw.githubusercontent.com/maqp/tfc-cev/master/tfcCEVinstaller.py
-        
-2. python tfcCEVinstaller.py
-
-Standard operation of TFC-CEV requires users to use three separate computers. Using TFC in such configuration is of paramount importance. However, TFC-CEV has an installaltion configuration that allows it to be run on three separate terminals on a single network connected computer. This allows users to test the features and stability of TFC and exchange messages. Please remember, that this configuration can not be claimed to be high assurance.
-
-
-**Polycipher components**
-
-**Name**   | **Block/State size (bits)** | **Key size (bits)** | **Cipher type** | **Structure**                             |
----------- | --------------------------- | ------------------- | --------------- | ----------------------------------------- |
-Keccak     | 1600                        | 256                 | Stream cipher   | Sponge function                           |
-Salsa20    | 512                         | 256                 | Stream cipher   | 32-bit addition, XOR, rotation operations |
-Twofish    | 128                         | 256                 | Block cipher    | Feistel network                           |
-Rijndael   | 128                         | 256                 | Block cipher    | Substitution-permutation network          |
-
-**Notes:**
-
-Keccak   is the SHA3 standard. It is used as PRNG for the stream cipher.
-Twofish  is an AES finalist, operated in randomized CTR-mode.
-Salsa20  is part of EStream suite.
-Rijndael is the AES standard, operated in GCM mode (randomized CTR + GMAC authentication).
-
-

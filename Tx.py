@@ -1,27 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import binascii
-import csv
-import math
-import os
-import random
-import readline
-import serial
-import subprocess
-import sys
-import time
-
-
-
-######################################################################
-#                             LICENCE                                #
-######################################################################
-
 # TFC-CEV (Cascading Encryption Version) || Tx.py
-version = 'CEV 0.4.13 beta'
+version = '0.5.4 beta'
 
 """
+GPL Licence
+
 This software is part of the TFC application, which is free software:
 You can redistribute it and/or modify it under the terms of the GNU
 General Public License as published by the Free Software Foundation,
@@ -35,434 +20,532 @@ for more details. For a copy of the GNU General Public License, see
 """
 
 
-
 ######################################################################
 #                            CONFIGURATION                           #
 ######################################################################
 
-PkgSize            = 140
-maxSleepTime       = 13
-shredIterations    = 3
-lMsgSleep          = 0.2
+# UI Settings
+clear_input_screen = False           # When enabled, clears input screen after msg/cmd.
+print_g_contacts   = True            # When printing groups, also print group members.
 
-debugging          = False
-emergencyExit      = False
-randomSleep        = False
-localTesting       = False
 
-if not localTesting:
-    port = serial.Serial('/dev/ttyAMA0', baudrate=9600, timeout=0.1)
+# Security settings
+emergency_exit     = False           # Enable emergency exit with double space as message.
+shred_iterations   = 3               # The number of iterations deleted files are
+                                     # overwritten with secure delete / shred.
 
+# Packet settings
+pkg_size           = 140             # Default length of payload.
+
+l_msg_sleep        = 0.5             # Minimum sleep time between consecutive packets
+                                     # ensures XMPP server is not flooded.
+
+# Metadata hiding features
+random_sleep       = False           # Random sleep between long msg / file transmission.
+                                     # Also works between constant transmission packets.
+
+max_sleep_time     = 13.0            # Maximum random_sleep time.
+
+c_transmission     = False           # Constant transmission of messages and commands.
+ct_static_sleep    = 4.0             # Sleep time between coin tosses.
+
+jitter_max         = 0.3             # Jitter between sent messages and commands makes it
+jitter_min         = 0.0             # harder to detect when communication is taking place.
+
+
+# Developer tools
+debugging          = False           # Set true to enable verbose messaging
+                                     # about inner operations in Rx.py.
+
+# Local testing mode: enabled when testing TFC on single computer.
+local_testing = False
+
+
+# Serial port settings
+serial_baudrate    = 9600            # Serial device speed.
+serial_device      = '/dev/ttyAMA0'  # The serial device Rx.py reads data from.
 
 
 ######################################################################
-#                          KECCAK STREAM CIPHER                      #
+#                                 IMPORTS                            #
 ######################################################################
 
-"""
-Algorithm Name: Keccak
+import base64
+import binascii
+import csv
+import math
+import os
+import random
+import readline
+import serial
+import subprocess
+import sys
+import time
+import zlib
 
-Authors: Guido Bertoni, Joan Daemen, Michael Peeters and Gilles
-Van Assche Implementation by Renaud Bauvin, STMicroelectronics
+from multiprocessing import (Process, Queue)
 
-This code, originally by Renaud Bauvin, is hereby put in the public
-domain. It is given as is, without any guarantee.
+# Import crypto libraries.
+from Crypto.Cipher import AES
 
-For more information, feedback or questions, please refer to our
-website: http://keccak.noekeon.org/
-"""
+try:
+    from salsa20 import XSalsa20_xor
+except AssertionError:
+    os.system('clear')
+    print '\nCRITICAL ERROR! Salsa20 library is corrupted.\nExiting Tx.py\n'
+    exit()
+
+try:
+    from twofish import Twofish
+except ImportError:
+    os.system('clear')
+    print '\nCRITICAL ERROR! Twofish library is corrupted.\nExiting Tx.py\n'
+    exit()
 
 
+######################################################################
+#                              CRYPTOGRAPHY                          #
+######################################################################
 
+# Keccak CTR
 class KeccakError(Exception):
-    """Class of error used in the Keccak implementation
+    """
+    Class of error used in the Keccak implementation.
 
-    Use: raise KeccakError.KeccakError("Text to be displayed")"""
+    Use: raise KeccakError.KeccakError("Text to be displayed")
+    """
 
     def __init__(self, value):
         self.value = value
+
     def __str__(self):
         return repr(self.value)
 
 
-
 class Keccak:
     """
-    Class implementing the Keccak sponge function
-    """
-    def __init__(self, b=1600):
-        """Constructor:
+    Class implementing the Keccak sponge function.
 
-        b: parameter b, must be 25, 50, 100, 200, 400, 800 or 1600 (default value)"""
+    Licence is listed in file LISENCE.md
+    """
+
+    def __init__(self, b=1600):
+        """
+        Constructor:
+
+        b: parameter b, must be 25, 50, 100, 200, 400, 800 or 1600 (default value).
+        """
+
         self.setB(b)
 
+    def setB(self, b):
+        """
+        Set the value of the parameter b (and thus w,l and nr).
 
-
-    def setB(self,b):
-        """Set the value of the parameter b (and thus w,l and nr)
-
-        b: parameter b, must be choosen among [25, 50, 100, 200, 400, 800, 1600]
+        :param b: parameter b, must be choosen among [25, 50, 100, 200, 400, 800, 1600].
         """
 
         if b not in [25, 50, 100, 200, 400, 800, 1600]:
             raise KeccakError.KeccakError('b value not supported - use 25, 50, 100, 200, 400, 800 or 1600')
 
-        # Update all the parameters based on the used value of b
-        self.b=b
-        self.w=b//25
-        self.l=int(math.log(self.w,2))
-        self.nr=12+2*self.l
+        # Update all the parameters based on the used value of b.
+        self.b  = b
+        self.w  = b // 25
+        self.l  = int(math.log(self.w, 2))
+        self.nr = 12 + 2 * self.l
 
     # Constants
 
-    ## Round constants
-    RC=[0x0000000000000001,
-        0x0000000000008082,
-        0x800000000000808A,
-        0x8000000080008000,
-        0x000000000000808B,
-        0x0000000080000001,
-        0x8000000080008081,
-        0x8000000000008009,
-        0x000000000000008A,
-        0x0000000000000088,
-        0x0000000080008009,
-        0x000000008000000A,
-        0x000000008000808B,
-        0x800000000000008B,
-        0x8000000000008089,
-        0x8000000000008003,
-        0x8000000000008002,
-        0x8000000000000080,
-        0x000000000000800A,
-        0x800000008000000A,
-        0x8000000080008081,
-        0x8000000000008080,
-        0x0000000080000001,
-        0x8000000080008008]
+    # Round constants
+    RC = [0x0000000000000001,
+          0x0000000000008082,
+          0x800000000000808A,
+          0x8000000080008000,
+          0x000000000000808B,
+          0x0000000080000001,
+          0x8000000080008081,
+          0x8000000000008009,
+          0x000000000000008A,
+          0x0000000000000088,
+          0x0000000080008009,
+          0x000000008000000A,
+          0x000000008000808B,
+          0x800000000000008B,
+          0x8000000000008089,
+          0x8000000000008003,
+          0x8000000000008002,
+          0x8000000000000080,
+          0x000000000000800A,
+          0x800000008000000A,
+          0x8000000080008081,
+          0x8000000000008080,
+          0x0000000080000001,
+          0x8000000080008008]
 
-    ## Rotation offsets
-    r=[[0,    36,     3,    41,    18]    ,
-       [1,    44,    10,    45,     2]    ,
-       [62,    6,    43,    15,    61]    ,
-       [28,   55,    25,    21,    56]    ,
-       [27,   20,    39,     8,    14]    ]
+    # Rotation offsets
+    r = [[ 0, 36,  3, 41, 18],
+         [ 1, 44, 10, 45,  2],
+         [62,  6, 43, 15, 61],
+         [28, 55, 25, 21, 56],
+         [27, 20, 39,  8, 14]]
 
+    # Generic utility functions.
+    def rot(self, x, n):
+        """
+        Bitwise rotation (to the left) of n bits
+        considering the string of bits is w bits long.
 
-    ## Generic utility functions
+        :param x: [not defined]
+        :param n: [not defined]
+        """
 
-    def rot(self,x,n):
-        """Bitwise rotation (to the left) of n bits considering the \
-        string of bits is w bits long"""
-
-        n = n%self.w
-        return ((x>>(self.w-n))+(x<<n))%(1<<self.w)
-
-
-
-    def enc(self,x,n):
-        """Encode the integer x in n bits (n must be a multiple of 8)"""
-
-        if x>=2**n:
-            raise KeccakError.KeccakError('x is too big to be coded in n bits')
-        if n%8!=0:
-            raise KeccakError.KeccakError('n must be a multiple of 8')
-        return ("%%0%dX" % (2*n//8)) % (x)
-
-
+        n = n % self.w
+        return ((x >> (self.w - n)) + (x << n)) % (1 << self.w)
 
     def fromHexStringToLane(self, string):
-        """Convert a string of bytes written in hexadecimal to a lane value"""
+        """
+        Convert a string of bytes written in hexadecimal to a lane value.
 
-        #Check that the string has an even number of characters i.e. whole number of bytes
-        if len(string)%2!=0:
+        :param string: [not defined]
+        """
+
+        # Check that the string has an even number of characters i.e. whole number of bytes.
+        if len(string) % 2 != 0:
             raise KeccakError.KeccakError("The provided string does not end with a full byte")
 
-        #Perform the modification
-        temp=''
-        nrBytes=len(string)//2
+        # Perform the modification.
+        temp = ''
+        nrBytes = len(string) // 2
         for i in range(nrBytes):
-            offset=(nrBytes-i-1)*2
-            temp+=string[offset:offset+2]
+            offset = (nrBytes - i - 1) * 2
+            temp += string[offset:offset + 2]
         return int(temp, 16)
 
-
-
     def fromLaneToHexString(self, lane):
-        """Convert a lane value to a string of bytes written in hexadecimal"""
+        """
+        Convert a lane value to a string of bytes written in hexadecimal.
 
-        laneHexBE = (("%%0%dX" % (self.w//4)) % lane)
-        #Perform the modification
-        temp=''
-        nrBytes=len(laneHexBE)//2
+        :param lane: [not defined]
+        """
+
+        laneHexBE = (("%%0%dX" % (self.w // 4)) % lane)
+
+        # Perform the modification.
+        temp = ''
+        nrBytes = len(laneHexBE) // 2
         for i in range(nrBytes):
-            offset=(nrBytes-i-1)*2
-            temp+=laneHexBE[offset:offset+2]
+            offset = (nrBytes - i - 1) * 2
+            temp += laneHexBE[offset:offset + 2]
         return temp.upper()
 
-
-
     def printState(self, state, info):
-        """Print on screen the state of the sponge function preceded by \
-        string info
+        """
+        Print on screen the state of the sponge function preceded by string info.
 
-        state: state of the sponge function
-        info: a string of characters used as identifier"""
+        :param state: State of the sponge function.
+        :param info:  A string of characters used as identifier.
+        """
 
-        print("Current value of state: %s" % (info))
+        print("Current value of state: %s" % info)
         for y in range(5):
-            line=[]
+            line = []
             for x in range(5):
-                 line.append(hex(state[x][y]))
+                line.append(hex(state[x][y]))
             print('\t%s' % line)
 
+    # Conversion functions String <-> Table (and vice-versa).
 
+    def convertStrToTable(self, string):
+        """
+        Convert a string of bytes to its 5x5 matrix representation.
 
-    ### Conversion functions String <-> Table (and vice-versa)
-    def convertStrToTable(self,string):
-        """Convert a string of bytes to its 5x5 matrix representation
+        :param string: string of bytes of hex-coded bytes (e.g. '9A2C...').
+        """
 
-        string: string of bytes of hex-coded bytes (e.g. '9A2C...')"""
-
-        #Check that input paramaters
-        if self.w%8!= 0:
+        # Check input paramaters.
+        if self.w % 8 != 0:
             raise KeccakError("w is not a multiple of 8")
-        if len(string)!=2*(self.b)//8:
-            raise KeccakError.KeccakError("string can't be divided in 25 blocks of w bits\
-            i.e. string must have exactly b bits")
+        if len(string) != 2 * self.b // 8:
+            raise KeccakError.KeccakError("String can't be divided in 25 blocks of w \
+                                           bits i.e. string must have exactly b bits")
 
-        #Convert
-        output=[[0,0,0,0,0],
-                [0,0,0,0,0],
-                [0,0,0,0,0],
-                [0,0,0,0,0],
-                [0,0,0,0,0]]
+        # Convert
+        output = [[0, 0, 0, 0, 0],
+                  [0, 0, 0, 0, 0],
+                  [0, 0, 0, 0, 0],
+                  [0, 0, 0, 0, 0],
+                  [0, 0, 0, 0, 0]]
+
         for x in range(5):
             for y in range(5):
-                offset=2*((5*y+x)*self.w)//8
-                output[x][y]=self.fromHexStringToLane(string[offset:offset+(2*self.w//8)])
+                offset = 2 * ((5 * y + x) * self.w) // 8
+                output[x][y] = self.fromHexStringToLane(string[offset:offset + (2 * self.w // 8)])
         return output
 
+    def convertTableToStr(self, table):
+        """
+        Convert a 5x5 matrix representation to its string representation.
 
+        :param table: [not defined]
+        """
 
-    def convertTableToStr(self,table):
-        """Convert a 5x5 matrix representation to its string representation"""
-
-        #Check input format
-        if self.w%8!= 0:
+        # Check input format.
+        if self.w % 8 != 0:
             raise KeccakError.KeccakError("w is not a multiple of 8")
-        if (len(table)!=5) or (False in [len(row)==5 for row in table]):
+        if (len(table) != 5) or (False in [len(row) == 5 for row in table]):
             raise KeccakError.KeccakError("table must be 5x5")
 
-        #Convert
-        output=['']*25
+        # Convert
+        output = [''] * 25
         for x in range(5):
             for y in range(5):
-                output[5*y+x]=self.fromLaneToHexString(table[x][y])
-        output =''.join(output).upper()
+                output[5 * y + x] = self.fromLaneToHexString(table[x][y])
+        output = ''.join(output).upper()
         return output
 
+    def Round(self, A, RCfixed):
+        """
+        Perform one round of computation as defined in the Keccak-f permutation.
 
-
-    ### Padding function
-    def pad(self,M, n):
-        """Pad M with reverse-padding to reach a length multiple of n
-
-        M: message pair (length in bits, string of hex characters ('9AFC...')
-        n: length in bits (must be a multiple of 8)
-        Example: pad([60, 'BA594E0FB9EBBD30'],8) returns 'BA594E0FB9EBBD13'
+        :param A:       Current state (5x5 matrix).
+        :param RCfixed: Value of round constant to use (integer).
         """
 
-        [my_string_length, my_string]=M
+        # Initialisation of temporary variables.
+        B = [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]]
+        C =  [0, 0, 0, 0, 0]
+        D =  [0, 0, 0, 0, 0]
 
-        # Check the parameter n
-        if n%8!=0:
-            raise KeccakError.KeccakError("n must be a multiple of 8")
-
-        # Check the length of the provided string
-        if len(my_string)%2!=0:
-            #Pad with one '0' to reach correct length (don't know test
-            #vectors coding)
-            my_string=my_string+'0'
-        if my_string_length>(len(my_string)//2*8):
-            raise KeccakError.KeccakError("the string is too short to contain the number of bits announced")
-
-        #Add the bit allowing reversible padding
-        nr_bytes_filled=my_string_length//8
-        if nr_bytes_filled==len(my_string)//2:
-            #bits fill the whole package: add a byte '01'
-            my_string=my_string+"01"
-        else:
-            #there is no addition of a byte... modify the last one
-            nbr_bits_filled=my_string_length%8
-
-            #Add the leading bit
-            my_byte=int(my_string[nr_bytes_filled*2:nr_bytes_filled*2+2],16)
-            my_byte=(my_byte>>(8-nbr_bits_filled))
-            my_byte=my_byte+2**(nbr_bits_filled)
-            my_byte="%02X" % my_byte
-            my_string=my_string[0:nr_bytes_filled*2]+my_byte
-
-        #Complete my_string to reach a multiple of n bytes
-        while((8*len(my_string)//2)%n!=0):
-            my_string=my_string+'00'
-        return my_string
-
-
-
-    def Round(self,A,RCfixed):
-        """Perform one round of computation as defined in the Keccak-f permutation
-
-        A: current state (5x5 matrix)
-        RCfixed: value of round constant to use (integer)
-        """
-
-        #Initialisation of temporary variables
-        B=[[0,0,0,0,0],
-           [0,0,0,0,0],
-           [0,0,0,0,0],
-           [0,0,0,0,0],
-           [0,0,0,0,0]]
-        C= [0,0,0,0,0]
-        D= [0,0,0,0,0]
-
-        #Theta step
+        # Theta step
         for x in range(5):
-            C[x] = A[x][0]^A[x][1]^A[x][2]^A[x][3]^A[x][4]
+            C[x] = A[x][0] ^ A[x][1] ^ A[x][2] ^ A[x][3] ^ A[x][4]
 
         for x in range(5):
-            D[x] = C[(x-1)%5]^self.rot(C[(x+1)%5],1)
+            D[x] = C[(x - 1) % 5] ^ self.rot(C[(x + 1) % 5], 1)
 
         for x in range(5):
             for y in range(5):
-                A[x][y] = A[x][y]^D[x]
+                A[x][y] = A[x][y] ^ D[x]
 
-        #Rho and Pi steps
-        for x in range(5):
-          for y in range(5):
-                B[y][(2*x+3*y)%5] = self.rot(A[x][y], self.r[x][y])
-
-        #Chi step
+        # Rho and Pi steps
         for x in range(5):
             for y in range(5):
-                A[x][y] = B[x][y]^((~B[(x+1)%5][y]) & B[(x+2)%5][y])
+                B[y][(2 * x + 3 * y) % 5] = self.rot(A[x][y], self.r[x][y])
 
-        #Iota step
-        A[0][0] = A[0][0]^RCfixed
+        # Chi step
+        for x in range(5):
+            for y in range(5):
+                A[x][y] = B[x][y] ^ ((~B[(x + 1) % 5][y]) & B[(x + 2) % 5][y])
+
+        # Iota step
+        A[0][0] = A[0][0] ^ RCfixed
 
         return A
 
+    def KeccakF(self, A, verbose=False):
+        """
+        Perform Keccak-f function on the state A.
 
-
-    def KeccakF(self,A, verbose=False):
-        """Perform Keccak-f function on the state A
-
-        A: 5x5 matrix containing the state
-        verbose: a boolean flag activating the printing of intermediate computations
+        :param A:       5x5 matrix containing the state.
+        :param verbose: A boolean flag activating the printing of intermediate computations.
         """
 
         if verbose:
-            self.printState(A,"Before first round")
+            self.printState(A, "Before first round")
 
         for i in range(self.nr):
-            #NB: result is truncated to lane size
-            A = self.Round(A,self.RC[i]%(1<<self.w))
+            # NB: result is truncated to lane size
+            A = self.Round(A, self.RC[i] % (1 << self.w))
 
             if verbose:
-                  self.printState(A,"Satus end of round #%d/%d" % (i+1,self.nr))
+                  self.printState(A, "Status end of round #%d/%d" % (i + 1, self.nr))
 
         return A
 
+    # Padding rule
 
+    def pad10star1(self, M, n):
+        """
+        Pad M with the pad10*1 padding rule to reach a length multiple of r bits.
 
-    def Keccak(self,M,r=1024,c=576,d=0,n=1024,verbose=False):
-        """Compute the Keccak[r,c,d] sponge function on message M
+        :param n: Length in bits (must be a multiple of 8).
+        :param M: Message pair (length in bits, string of hex characters ('9AFC...').
 
-        M: message pair (length in bits, string of hex characters ('9AFC...')
-        r: bitrate in bits (defautl: 1024)
-        c: capacity in bits (default: 576)
-        d: diversifier in bits (default: 0 bits)
-        n: length of output in bits (default: 1024),
-        verbose: print the details of computations(default:False)
+        Example:  pad10star1([60, 'BA594E0FB9EBBD30'],8) returns 'BA594E0FB9EBBD93'.
         """
 
-        #Check the inputs
-        if (r<0) or (r%8!=0):
-            raise KeccakError.KeccakError('r must be a multiple of 8')
-        if (n%8!=0):
-            raise KeccakError.KeccakError('outputLength must be a multiple of 8')
-        if (d<0) or (d>255):
-            raise KeccakError.KeccakError('d must be in the range [0, 255]')
-        self.setB(r+c)
+        [my_string_length, my_string] = M
+
+        # Check the parameter n.
+        if n % 8 != 0:
+            raise KeccakError.KeccakError("n must be a multiple of 8")
+
+        # Check the length of the provided string.
+        if len(my_string) % 2 != 0:
+
+            # Pad with one '0' to reach correct length (don't know test vectors coding).
+            my_string = my_string + '0'
+
+        if my_string_length > (len(my_string) // 2 * 8):
+            raise KeccakError.KeccakError("The string is too short to contain the number of bits announced")
+
+        nr_bytes_filled = my_string_length // 8
+        nbr_bits_filled = my_string_length % 8
+        l = my_string_length % n
+        if (n - 8) <= l <= (n - 2):
+            if nbr_bits_filled == 0:
+                my_byte = 0
+            else:
+                my_byte = int(my_string[nr_bytes_filled * 2:nr_bytes_filled * 2 + 2], 16)
+            my_byte   = (my_byte >> (8 - nbr_bits_filled))
+            my_byte   = my_byte + 2 ** nbr_bits_filled + 2 ** 7
+            my_byte   = "%02X" % my_byte
+            my_string = my_string[0:nr_bytes_filled * 2] + my_byte
+        else:
+            if nbr_bits_filled == 0:
+                my_byte = 0
+            else:
+                my_byte = int(my_string[nr_bytes_filled * 2:nr_bytes_filled * 2 + 2], 16)
+            my_byte   = (my_byte >> (8 - nbr_bits_filled))
+            my_byte   = my_byte + 2 ** nbr_bits_filled
+            my_byte   = "%02X" % my_byte
+            my_string = my_string[0:nr_bytes_filled * 2] + my_byte
+            while(8 * len(my_string) // 2) % n < (n - 8):
+                my_string = my_string + '00'
+            my_string = my_string + '80'
+
+        return my_string
+
+    def Keccak(self, M, r=1024, c=576, n=1024, verbose=False):
+        """
+        Compute the Keccak[r,c,d] sponge function on message M.
+
+        :param verbose: Print the details of computations (default: False).
+        :param n:       Length of output in bits          (default: 1024).
+        :param c:       Capacity in bits                  (default: 576).
+        :param r:       Bitrate in bits                   (default: 1024).
+        :param M:       Message pair (length in bits, string of hex characters ('9AFC...').
+        """
+
+        # Check the inputs
+        if (r < 0) or (r % 8 != 0):
+            raise KeccakError.KeccakError('r must be a multiple of 8 in this implementation')
+        if n % 8 != 0:
+            raise KeccakError.KeccakError('OutputLength must be a multiple of 8')
+        self.setB(r + c)
 
         if verbose:
-            print("Create a Keccak function with (r=%d, c=%d, d=%d (i.e. w=%d))" % (r,c,d,(r+c)//25))
+            print("Create a Keccak function with (r=%d, c=%d (i.e. w=%d))" % (r, c, (r + c) // 25))
 
-        #Compute lane length (in bits)
-        w=(r+c)//25
+        # Compute lane length (in bits).
+        w = (r + c) // 25
 
         # Initialisation of state
-        S=[[0,0,0,0,0],
-           [0,0,0,0,0],
-           [0,0,0,0,0],
-           [0,0,0,0,0],
-           [0,0,0,0,0]]
+        S = [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]]
 
-        #Padding of messages
-        P=self.pad(M,8) + self.enc(d,8) + self.enc(r//8,8)
-        P=self.pad([8*len(P)//2,P],r)
+        # Padding of messages
+        P = self.pad10star1(M, r)
 
         if verbose:
-            print("String ready to be absorbed: %s (will be completed by %d x '00')" % (P, c//8))
+            print("String ready to be absorbed: %s (will be completed by %d x '00')" % (P, c // 8))
 
-        #Absorbing phase
-        for i in range((len(P)*8//2)//r):
-            Pi=self.convertStrToTable(P[i*(2*r//8):(i+1)*(2*r//8)]+'00'*(c//8))
+        # Absorbing phase
+        for i in range((len(P) * 8 // 2) // r):
+            Pi = self.convertStrToTable(P[i * (2 * r // 8):(i + 1) * (2 * r // 8)] + '00' * (c // 8))
 
             for y in range(5):
-              for x in range(5):
-                  S[x][y] = S[x][y]^Pi[x][y]
+                for x in range(5):
+                    S[x][y] = S[x][y] ^ Pi[x][y]
             S = self.KeccakF(S, verbose)
 
         if verbose:
             print("Value after absorption : %s" % (self.convertTableToStr(S)))
 
-        #Squeezing phase
+        # Squeezing phase
         Z = ''
         outputLength = n
-        while outputLength>0:
-            string=self.convertTableToStr(S)
-            Z = Z + string[:r*2//8]
+        while outputLength > 0:
+            string = self.convertTableToStr(S)
+            Z      = Z + string[:r * 2 // 8]
             outputLength -= r
-            if outputLength>0:
+            if outputLength > 0:
                 S = self.KeccakF(S, verbose)
 
-            # NB: done by block of length r, could have to be cut if outputLength
-            #     is not a multiple of r
+            # NB: done by block of length r, could have to
+            # be cut if outputLength is not a multiple of r.
 
         if verbose:
             print("Value after squeezing : %s" % (self.convertTableToStr(S)))
 
-        return Z[:2*n//8]
+        return Z[:2 * n // 8]
 
 
+def keccak256(hash_input):
+    """
+    Calculate 256 bit Keccak (SHA3) checksum from input.
 
-def keccak_256(hashInput):
-    hexMsg = binascii.hexlify(hashInput)
-    return Keccak().Keccak(((8 * len(hashInput)), hexMsg), 1088, 512, 0, 256, 0)
+    :param hash_input: The value to be digested.
+    :return:           256-bit Keccak-digest in hex format.
+
+    Keccak is a hash function that uses a sponge construction; It is the SHA3
+    standard set by NIST in 2012. This configuration runs Keccak with rate of
+    1088 and capacity of 512 to provide 256-bit collision resistance and
+    256-bit (second) preimage resistance.
+
+    The rate and capacity are set according to the reccomendatios of Keccak
+    developer team: http://keccak.noekeon.org/Keccak-submission-3.pdf // page 2
+
+    The length of digest is 256 bits and it is output in 64 hex numbers.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(hash_input, str):
+        exit_with_msg('CRITICAL ERROR! M(keccak256): Wrong input type.')
+
+    # Convert input to hexadecimal format.
+    hexmsg = binascii.hexlify(hash_input)
+
+    # Return the 256-bit digest.
+    return Keccak().Keccak(((8 * len(hash_input)), hexmsg), 1088, 512, 256)
 
 
+def keccak_encrypt(plaintext, hex_key):
+    """
+    Encrypt plaintext with Keccak as PRF (CTR mode).
 
-def keccak_encrypt(message, HexKey):
+    :param plaintext: Input to be encrypted.
+    :param hex_key:   Independent 256-bit encryption key.
+    :return:          Keccak ciphertext.
 
-    # CTR mode, no authentication.
+    The used Keccak-library is the official version written by Renaud Bauvin.
+    The PRF is used in CTR mode: The implementation padds the plaintext to
+    256 bit blocks, concatenates the 256-bit symmetric key with 256-bit nonce
+    loaded from /dev/urandom to produce a 512-bit IV. For each block of
+    plaintext, a matching length digest is appended to key stream. The next
+    digest is generated by hashing the most recent digest together with key.
+    Once the keystream is as long as the plaintext, the two are XORred together
+    to produce the ciphertext. In last step, the nonce is appended to the
+    ciphertext.
+    """
 
-    # Add padding to plainText, (256-bit block-size).
-    length     = 32 - (len(message) % 32)
-    message   += length * chr(length)
+    # Verify input parameter types.
+    if not (isinstance(plaintext, str) and isinstance(hex_key, str)):
+        exit_with_msg('CRITICAL ERROR! M(keccak_encrypt): Wrong input type.')
+
+    # Add padding to plaintext (256-bit block-size).
+    length     = 32 - (len(plaintext) % 32)
+    plaintext += length * chr(length)
 
     # Convert hexadecimal key to binary data.
-    key        = binascii.unhexlify(HexKey)
+    key        = binascii.unhexlify(hex_key)
 
     # Generate 256-bit nonce.
     nonce      = os.urandom(32)
@@ -470,749 +553,912 @@ def keccak_encrypt(message, HexKey):
     # Generate 512-bit IV.
     iv         = (key + nonce)
 
-    # Sponge function takes 512-bit IV, squeezes out 256 bit keystream block #1.
-    step       = keccak_256(iv)
+    # Keccak takes the IV and outputs a 256 bit keystream block #1.
+    step       = keccak256(iv)
 
     i          = 0
     keystream  = ''
+    step_list  = []
 
-    # For n-byte message, n/32 additional rounds is needed to generate proper length keystream.
-    while i < (len(message) / 32):
+    # For n-byte plaintext, n/32 additional rounds are
+    # needed to generate the proper length keystream.
+    while i < (len(plaintext) / 32):
         keystream += step
-        step       = keccak_256(key + step)
+        step       = keccak256(key + step)
         i         += 1
 
+        # Check similar key stream block hasn't been generated earlier.
+        if step in step_list:
+            exit_with_msg('CRITICAL ERROR! M(keccak_encrypt): Keccak keystream block was used twice.')
+        else:
+            step_list.append(step)
+
+    # Double-check key stream block is not used twice.
+    try:
+        seen = set()
+        assert not any(i in seen or seen.add(i) for i in step_list)
+
+    except AssertionError:
+        exit_with_msg('CRITICAL ERROR! M(keccak_encrypt): Keccak keystream block was used twice.')
+
     # Convert key from hex format to binary.
-    keystreamBIN = binascii.unhexlify(keystream)
+    keystream_bin = binascii.unhexlify(keystream)
 
-    # XOR keystream with plaintext to acquire ciphertext.
-    if len(message) == len(keystreamBIN):
-        ciphertext = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(message, keystreamBIN))
+    ciphertext    = ''
+
+    # XOR keystream with plaintext to generate ciphertext.
+    if len(plaintext) == len(keystream_bin):
+        ciphertext = ''.join(chr(ord(p) ^ ord(k)) for p, k in zip(plaintext, keystream_bin))
+
     else:
-        os.system('clear')
-        print '\nCRITICAL ERROR! Keccak ciphertext - keystream length mismatch. Exiting.\n'
-        exit()
+        exit_with_msg('CRITICAL ERROR! M(keccak_encrypt): Keccak plaintext - keystream length mismatch.')
 
     return nonce + ciphertext
 
 
-
-######################################################################
-#                        SALSA20 STREAM CIPHER                       #
-######################################################################
-
-"""
-This file is part of Python Salsa20
-a Python bridge to the libsodium C [X]Salsa20 library
-Released under The BSD 3-Clause License
-
-Copyright (c) 2013 Keybase
-Python module and ctypes bindings
-"""
-
-import imp
-from ctypes import (cdll, c_char_p, c_int, c_uint64, create_string_buffer)
-from ctypes import (cdll, Structure, POINTER, pointer, c_char_p, c_int, c_uint32, create_string_buffer)
-
-
-_salsa20 = cdll.LoadLibrary(imp.find_module('_salsa20')[1])
-
-
-_stream_salsa20 = _salsa20.exp_stream_salsa20
-_stream_salsa20.argtypes = [  c_char_p,  # unsigned char * c
-                              c_uint64,  # unsigned long long clen
-                              c_char_p,  # const unsigned char * n
-                              c_char_p   # const unsigned char * k
-                           ]
-_stream_salsa20.restype = c_int
-
-_stream_salsa20_xor = _salsa20.exp_stream_salsa20_xor
-_stream_salsa20_xor.argtypes = [  c_char_p,  # unsigned char * c
-                                  c_char_p,  # const unsigned char *m
-                                  c_uint64,  # unsigned long long mlen
-                                  c_char_p,  # const unsigned char * n
-                                  c_char_p   # const unsigned char * k
-                               ]
-_stream_salsa20_xor.restype = c_int
-
-_stream_xsalsa20 = _salsa20.exp_stream_xsalsa20
-_stream_xsalsa20.argtypes = [  c_char_p,  # unsigned char * c
-                               c_uint64,  # unsigned long long clen
-                               c_char_p,  # const unsigned char * n
-                               c_char_p   # const unsigned char * k
-                            ]
-_stream_xsalsa20.restype = c_int
-
-_stream_xsalsa20_xor = _salsa20.exp_stream_xsalsa20_xor
-_stream_xsalsa20_xor.argtypes = [  c_char_p,  # unsigned char * c
-                                   c_char_p,  # const unsigned char *m
-                                   c_uint64,  # unsigned long long mlen
-                                   c_char_p,  # const unsigned char * n
-                                   c_char_p   # const unsigned char * k
-                                ]
-_stream_xsalsa20_xor.restype = c_int
-
-IS_PY2 = sys.version_info < (3, 0, 0, 'final', 0)
-
-
-
-def _ensure_bytes(data):
-    if (IS_PY2 and not isinstance(data, str)) or (not IS_PY2 and not isinstance(data, bytes)):
-        raise TypeError('can not encrypt/decrypt unicode objects')
-
-
-
-def Salsa20_keystream(length, nonce, key):
-    _ensure_bytes(nonce)
-    _ensure_bytes(key)
-    if not len(key) == 32: raise ValueError('invalid key length')
-    if not len(nonce) == 8: raise ValueError('invalid nonce length')
-    if not length > 0: raise ValueError('invalid length')
-
-    outbuf = create_string_buffer(length)
-    _stream_salsa20(outbuf, length, nonce, key)
-    return outbuf.raw
-
-
-
-def Salsa20_xor(message, nonce, key):
-    _ensure_bytes(nonce)
-    _ensure_bytes(key)
-    _ensure_bytes(message)
-    if not len(key) == 32: raise ValueError('invalid key length')
-    if not len(nonce) == 8: raise ValueError('invalid nonce length')
-    if not len(message) > 0: raise ValueError('invalid message length')
-
-    outbuf = create_string_buffer(len(message))
-    _stream_salsa20_xor(outbuf, message, len(message), nonce, key)
-    return outbuf.raw
-
-
-
-def XSalsa20_keystream(length, nonce, key):
-    _ensure_bytes(nonce)
-    _ensure_bytes(key)
-    if not len(key) == 32: raise ValueError('invalid key length')
-    if not len(nonce) == 24: raise ValueError('invalid nonce length')
-    if not length > 0: raise ValueError('invalid length')
-
-    outbuf = create_string_buffer(length)
-    _stream_xsalsa20(outbuf, length, nonce, key)
-    return outbuf.raw
-
-
-
-def XSalsa20_xor(message, nonce, key):
-    _ensure_bytes(nonce)
-    _ensure_bytes(key)
-    _ensure_bytes(message)
-    if not len(key) == 32: raise ValueError('invalid key length')
-    if not len(nonce) == 24: raise ValueError('invalid nonce length')
-    if not len(message) > 0: raise ValueError('invalid message length')
-
-    outbuf = create_string_buffer(len(message))
-    _stream_xsalsa20_xor(outbuf, message, len(message), nonce, key)
-    return outbuf.raw
-
-
-
-def salsa_20_encrypt(plaintext, hexKey):
-
-    # Convert hexadecimal key to bitstring.
-    key        = binascii.unhexlify(hexKey)
-
-    # Generate unique nonce.
-    nonce      = os.urandom(24)
-
-    # XOR plaintext with keystream to acquire ciphertext.
-    ciphertext = XSalsa20_xor(plaintext, nonce, key)
-
-    return nonce + ciphertext
-
-
-
-######################################################################
-#                        TWOFISH BLOCK CIPHER                        #
-######################################################################
-
-"""
-This file is part of Python Twofish a Python bridge to the C Twofish library by Niels Ferguson
-Released under The BSD 3-Clause License
-Copyright (c) 2013 Keybase
-Python module and ctypes bindings
-"""
-
-import imp
-
-_twofish = cdll.LoadLibrary(imp.find_module('_twofish')[1])
-
-
-
-class _Twofish_key(Structure):
-    _fields_ = [("s", (c_uint32 * 4) * 256),
-                ("K", c_uint32 * 40)]
-
-_Twofish_initialise = _twofish.exp_Twofish_initialise
-_Twofish_initialise.argtypes = []
-_Twofish_initialise.restype = None
-
-_Twofish_prepare_key = _twofish.exp_Twofish_prepare_key
-_Twofish_prepare_key.argtypes = [ c_char_p,  # uint8_t key[]
-                                  c_int,     # int key_len
-                                  POINTER(_Twofish_key) ]
-_Twofish_prepare_key.restype = None
-
-_Twofish_encrypt = _twofish.exp_Twofish_encrypt
-_Twofish_encrypt.argtypes = [ POINTER(_Twofish_key),
-                              c_char_p,     # uint8_t p[16]
-                              c_char_p      # uint8_t c[16]
-                            ]
-_Twofish_encrypt.restype = None
-
-_Twofish_decrypt = _twofish.exp_Twofish_decrypt
-_Twofish_decrypt.argtypes = [ POINTER(_Twofish_key),
-                              c_char_p,     # uint8_t c[16]
-                              c_char_p      # uint8_t p[16]
-                            ]
-_Twofish_decrypt.restype = None
-
-_Twofish_initialise()
-
-IS_PY2 = sys.version_info < (3, 0, 0, 'final', 0)
-
-
-
-def _ensure_bytes(data):
-    if (IS_PY2 and not isinstance(data, str)) or (not IS_PY2 and not isinstance(data, bytes)):
-        raise TypeError('can not encrypt/decrypt unicode objects')
-
-
-
-class Twofish():
-    def __init__(self, key):
-        if not len(key) > 0 and len(key) <= 32:
-            raise ValueError('invalid key length')
-        _ensure_bytes(key)
-
-        self.key = _Twofish_key()
-        _Twofish_prepare_key(key, len(key), pointer(self.key))
-
-
-
-    def encrypt(self, data):
-        if not len(data) == 16:
-            raise ValueError('invalid block length')
-        _ensure_bytes(data)
-
-        outbuf = create_string_buffer(len(data))
-        _Twofish_encrypt(pointer(self.key), data, outbuf)
-        return outbuf.raw
-
-
-
-    def decrypt(self, data):
-        if not len(data) == 16:
-            raise ValueError('invalid block length')
-        _ensure_bytes(data)
-
-        outbuf = create_string_buffer(len(data))
-        _Twofish_decrypt(pointer(self.key), data, outbuf)
-        return outbuf.raw
-
-
-
-def self_test():
-    # Repeat the test on the same vectors checked at runtime by the library
-    # 128-bit test is the I=3 case of section B.2 of the Twofish book.
-    t128 = ('9F589F5CF6122C32B6BFEC2F2AE8C35A',
-        'D491DB16E7B1C39E86CB086B789F5419',
-        '019F9809DE1711858FAAC3A3BA20FBC3')
-
-    # 192-bit test is the I=4 case of section B.2 of the Twofish book.
-    t192 = ('88B2B2706B105E36B446BB6D731A1E88EFA71F788965BD44',
-        '39DA69D6BA4997D585B6DC073CA341B2',
-        '182B02D81497EA45F9DAACDC29193A65')
-
-    # 256-bit test is the I=4 case of section B.2 of the Twofish book.
-    t256 = ('D43BB7556EA32E46F2A282B7D45B4E0D57FF739D4DC92C1BD7FC01700CC8216F',
-        '90AFE91BB288544F2C32DC239B2635E6',
-        '6CB4561C40BF0A9705931CB6D408E7FA')
-
-    for t in (t128, t192, t256):
-        k = binascii.unhexlify(t[0])
-        p = binascii.unhexlify(t[1])
-        c = binascii.unhexlify(t[2])
-
-        T = Twofish(k)
-        if not T.encrypt(p) == c or not T.decrypt(c) == p:
-            exit_with_msg('CRITICAL ERROR! Twofish library is corrupted.')
-
-# Perform Twofish library self-test.
-self_test()
-
-
-
-def twofish_encrypt(plainText, HexKey):
-
-    #CTR mode, no authentication.
-
-    # Add padding to plainText.
-    length     = 16 - (len(plainText) % 16)
-    plainText += length * chr(length)
+def keccak_decrypt(ctext, hex_key):
+    """
+    Decrypt ciphertext with Keccak in CTR mode. (Used in Tx.py for self testing.)
+
+    :param ctext:   Ciphertext, encrypted test string.
+    :param hex_key: 256-bit self-test encryption key.
+    :return:        Plaintext to be compared.
+
+    The used Keccak-library is the official version written by Renaud Bauvin.
+    The PRF is used in CTR mode: The implementation separates the nonce from
+    the ciphertext and appends it to the 256-bit symmetric key to produce the
+    512-bit IV that is then hashed to produce the first keystream block. For
+    each consecutive block of ciphertext a block of key stream is generated
+    by hashing the key appended with the most recent digest. Once the
+    keystream is as long as the ciphertext, the two are XORred together to
+    produce the plaintext. In last step, the padding is removed from plaintext.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(ctext, str) and isinstance(hex_key, str)):
+        exit_with_msg('CRITICAL ERROR! M(keccak_decrypt): Wrong input type.')
 
     # Convert hexadecimal key to binary data.
-    key        = binascii.unhexlify(HexKey)
+    key       = binascii.unhexlify(hex_key)
 
-    # Generate 128-bit nonce.
+    # Separate 256-bit nonce from ciphertext.
+    nonce     = ctext[:32]
+    ctext     = ctext[32:]
+
+    # Generate 512-bit IV.
+    iv        = (key + nonce)
+
+    # Keccak takes the IV and outputs a 256 bit keystream block #1.
+    step      = keccak256(iv)
+
+    i         = 0
+    keystream = ''
+    step_list = []
+
+    # For n-byte ciphertext, n/32 additional rounds is
+    # needed to generate proper length keystream.
+    while i < (len(ctext) / 32):
+        keystream += step
+        step       = keccak256(key + step)
+
+        # Check similar key stream block hasn't been generated earlier.
+        if step in step_list:
+            exit_with_msg('CRITICAL ERROR! M(keccak_decrypt): Keccak keystream block was used twice.')
+        else:
+            step_list.append(step)
+
+        i += 1
+
+    # Double check key stream block is not used twice.
+    try:
+        seen = set()
+        assert not any(i in seen or seen.add(i) for i in step_list)
+
+    except AssertionError:
+        exit_with_msg('CRITICAL ERROR! M(keccak_decrypt): Keccak keystream block was used twice.')
+
+    # Convert key from hex format to binary.
+    keystream_bin = binascii.unhexlify(keystream)
+
+    plaintext     = ''
+
+    # XOR keystream with ciphertext to obtain plaintext.
+    if len(ctext) == len(keystream_bin):
+        plaintext = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(ctext, keystream_bin))
+
+    else:
+        exit_with_msg('CRITICAL ERROR! M(keccak_decrypt): Keccak ciphertext - keystream length mismatch.')
+
+    # Remove padding.
+    plaintext = plaintext[:-ord(plaintext[-1:])]
+
+    return plaintext
+
+
+def self_test_keccak_ctr():
+    """
+    Run Keccak CTR mode self test.
+
+    :return: None.
+    """
+
+    # Test the Keccak hash algorithm.
+    print 'Keccak-F    self test initialized'
+
+    test_input  = 'Keccak initialization test'
+    test_vector = '118A7B87E6CB739423374CD3498E2501FD12E3B02B96278820B19677AAE68809'
+
+    if keccak256(test_input) != test_vector:
+        exit_with_msg('CRITICAL ERROR! Keccak class is corrupted.')
+    else:
+        print 'Keccak-F    self test successful'
+
+    # Test the Keccak CTR implementation.
+    print 'Keccak-CTR  self test initializated'
+    test_pt  = 'Keccak-CTR initialization test'
+    test_key = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'
+    test_ct  = keccak_encrypt(test_pt, test_key)
+    dec_pt   = keccak_decrypt(test_ct, test_key)
+
+    if test_pt != dec_pt:
+        exit_with_msg('CRITICAL ERROR! Keccak CTR self test failed.')
+    else:
+        print 'Keccak-CTR  self test successful'
+        return None
+
+
+# XSalsa20
+def salsa20_encrypt(plaintext, hex_key):
+    """
+    Encrypt plaintext with XSalsa20.
+
+    :param plaintext: Input to be encrypted.
+    :param hex_key:   Independent 256-bit encryption key.
+    :return:          XSalsa20 ciphertext.
+
+    The XSalsa20 is a stream cipher based on add-rotate-XOR (ARX).
+    It is used with a /dev/urandom spawned, 192-bit nonce
+    (length specified in libsodium). The independent, symmetric,
+    256-bit key is used together with nonce to produce a key stream,
+    which is then XORred with the plaintext to produce ciphertext.
+    In last step the nonce is appended to the ciphertext.
+    """
+
+    # Verify input parameter types.
+    if not isinstance(plaintext, str) or not isinstance(hex_key, str):
+        exit_with_msg('CRITICAL ERROR! M(salsa20_encrypt): Wrong input type.')
+
+    # Convert hexadecimal key to bitstring.
+    key = binascii.unhexlify(hex_key)
+
+    # Generate unique nonce.
+    iv  = os.urandom(24)
+
+    # XOR plaintext with keystream to acquire ciphertext.
+    ciphertext = XSalsa20_xor(plaintext, iv, key)
+
+    return iv + ciphertext
+
+
+def salsa20_decrypt(ctext, hex_key):
+    """
+    Decrypt ciphertext with Salsa20. (Used in Tx.py for self testing.)
+
+    :param ctext:   Encrypted test string.
+    :param hex_key: 256-bit self-test encryption key.
+    :return:        Plaintext to be compared.
+
+    The XSalsa20 is a stream cipher based on add-rotate-XOR (ARX).
+    In decryption process, the 192-bit nonce is separated from
+    siphertext. The independent, symmetric, 256-bit key is used
+    together with nonce to produce a key stream, which is then
+    XORred with the ciphertext to produce the plaintext.
+    """
+
+    # Verify input parameter types.
+    if not isinstance(ctext, str) or not isinstance(hex_key, str):
+        exit_with_msg('CRITICAL ERROR! M(salsa20_decrypt): Wrong input type.')
+
+    # Separate nonce from ciphertext.
+    nonce     = ctext[:24]
+    ctext     = ctext[24:]
+
+    # Convert hexadecimal key to bitstring.
+    key       = binascii.unhexlify(hex_key)
+
+    # Create keystream and XOR ciphertext with it to obtain plaintext.
+    plaintext = XSalsa20_xor(ctext, nonce, key)
+
+    return plaintext
+
+
+def self_test_salsa20():
+    """
+    Run salsa20 self test.
+
+    :return: None.
+    """
+
+    print 'Salsa20     self test initializated'
+    test_pt  = 'Salsa20 initialization test'
+    test_key = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'
+    test_ct  = salsa20_encrypt(test_pt, test_key)
+    dec_pt   = salsa20_decrypt(test_ct, test_key)
+
+    if test_pt != dec_pt:
+        exit_with_msg('CRITICAL ERROR! Salsa20 self test failed.')
+    else:
+        print 'Salsa20     self test successful'
+        return None
+
+
+# Twofish CTR
+def twofish_encrypt(plaintext, hex_key):
+    """
+    Encrypt plaintext with Twofish in CTR mode.
+
+    :param plaintext: Input to be encrypted.
+    :param hex_key:   Independent 256-bit encryption key.
+    :return:          Twofish ciphertext.
+
+    Twofish is based on well understood Feistel network, but since the
+    implementation used is ECB mode, a custom CTR-mode was created:
+
+    'Plaintext' is padded to 16 byte blocks. Next, a 128-bit nonce is loaded
+    from /dev/urandom. For each 'plaintext' block, the nonce is XORred with
+    an increasing counter to create an IV, that is then encrypted with Twofish
+    using a 256-bit symmetric key to produce a key stream block. Once the key
+    stream is as long as the 'plaintext', the two are XORred together to
+    produce the ciphertext. Finally, the nonce is appended to the ciphertext.
+
+    The difference to standard version is, separate space for counter is not
+    reserved: this allows the IV more entropy compared to concatenated 64-bit
+    nonce and 64-bit counters.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(plaintext, str) and isinstance(hex_key, str)):
+        exit_with_msg('CRITICAL ERROR! M(twofish_encrypt): Wrong input type.')
+
+    # Add padding to plaintext.
+    length     = 16 - (len(plaintext) % 16)
+    plaintext += length * chr(length)
+
+    # Convert hexadecimal key to binary data.
+    key        = binascii.unhexlify(hex_key)
+
+    # Generate a 128-bit nonce.
     nonce      = os.urandom(16)
 
-    # n.o. keystream blocks equals the n.o. CT blocks.
-    msgA       = [plainText[i:i + 16] for i in range(0, len(plainText), 16)]
+    # n.o. keystream blocks equals the n.o. plaintext blocks.
+    msg_a      = [plaintext[i:i + 16] for i in range(0, len(plaintext), 16)]
 
     keystream  = ''
     counter    = 1
+    i          = 0
+    iv_list    = []
 
-    for block in msgA:
+    while i < len(msg_a):
 
-        # Hash the counter value and output 64 hex numbers.
-        counterHash = keccak_256(str(counter))
+        # Prepend counter with zeros.
+        ctr = str(counter).zfill(16)
 
-        # Convert the digest to 32-bit binary.
-        counterBin  = binascii.unhexlify(counterHash)
+        iv  = ''
 
-        # Truncate length to 128 bits.
-        ctr         = counterBin[:16]
-
-        # XOR 128-bit nonce with 128-bit hash of counter to create IV of Twofish cipher.
+        # XOR 128-bit nonce with the counter to create IV of Twofish cipher.
         if len(ctr) == 16 and len(nonce) == 16:
-            iv       = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(ctr, nonce))
+            iv = ''.join(chr(ord(c) ^ ord(n)) for c, n in zip(ctr, nonce))
         else:
-            exit_with_msg('CRITICAL ERROR! Twofish counter hash - nonce length mismatch.')
+            exit_with_msg('CRITICAL ERROR! M(twofish_encrypt): Twofish counter hash - nonce length mismatch.')
+
+        # Check IV was not already used.
+        if iv in iv_list:
+            exit_with_msg('CRITICAL ERROR! M(twofish_encrypt): Twofish IV was used twice.')
+        else:
+            iv_list.append(iv)
 
         # Initialize Twofish cipher with key.
-        E           = Twofish(key)
+        twofish    = Twofish(key)
 
-        # Encrypt unique IV with key.
-        keyBlock    = E.encrypt(iv)
+        # Encrypt the unique IV with key.
+        key_block  = twofish.encrypt(iv)
 
         # Append new block to keystream.
-        keystream  += keyBlock
+        keystream += key_block
 
         # Increase the counter of randomized CTR mode.
-        counter    += 1
+        counter   += 1
+
+        i += 1
+
+    # Double-check IV is not used twice.
+    try:
+        seen = set()
+        assert not any(i in seen or seen.add(i) for i in iv_list)
+
+    except AssertionError:
+        exit_with_msg('CRITICAL ERROR! M(twofish_encrypt): Twofish IV was used twice.')
+
+    ciphertext = ''
 
     # XOR keystream with plaintext to acquire ciphertext.
-    if len(plainText) == len(keystream):
-        ciphertext = ''.join(chr(ord(msgLetter) ^ ord(keyLetter)) for msgLetter, keyLetter in zip(plainText, keystream))
+    if len(plaintext) == len(keystream):
+        ciphertext = ''.join(chr(ord(p) ^ ord(k)) for p, k in zip(plaintext, keystream))
     else:
-        exit_with_msg('CRITICAL ERROR! Twofish plaintext - keystream length mismatch.')
+        exit_with_msg('CRITICAL ERROR! M(twofish_encrypt): Twofish plaintext - keystream length mismatch.')
 
     return nonce + ciphertext
 
 
+def twofish_decrypt(ctext, hex_key):
+    """
+    Decrypt ciphertext with Twofish in CTR mode. (Used in Tx.py for self testing.)
 
-######################################################################
-#     AES (GCM) AUTHENTICATED ENCRYPTION (RIJNDAEL BLOCK CIPHER)     #
-######################################################################
+    :param ctext:   Encrypted test string.
+    :param hex_key: 256-bit self-test encryption key.
+    :return:        Plaintext to be compared.
 
-"""
-#  Cipher/AES.py : AES
-# ===================================================================
-# The contents of this file are dedicated to the public domain.  To
-# the extent that dedication to the public domain is not available,
-# everyone is granted a worldwide, perpetual, royalty-free,
-# non-exclusive license to exercise all rights associated with the
-# contents of this file for any purpose whatsoever.
-# No rights are reserved.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    Twofish is based on well understood Feistel network. Since the
+    library provided by Keystream is ECB mode, a custom CTR-mode was created:
 
-# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
-# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+    Nonce is separated from ciphertext that is then padded to 16 byte blocks.
+    Next, for each ciphertext block, the nonce is XORred a counter to create
+    an IV, that is then encrypted with Twofish using an independent 256-bit
+    symmetric key to produce a key stream block. Once the key stream is as
+    long as the ciphertext, the two are XORred together to produce the plaintext.
+    In last step the padding is removed from the obtained plaintext.
+    """
 
-# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+    # Verify input parameter types.
+    if not (isinstance(ctext, str) and isinstance(hex_key, str)):
+        exit_with_msg('CRITICAL ERROR! M(twofish_decrypt): Wrong input type.')
 
-PyCrypto licence (https://raw.githubusercontent.com/dlitz/pycrypto/master/COPYRIGHT)
-To the best of our knowledge, with the exceptions noted below or
-within the files themselves, the files that constitute PyCrypto are in
-the public domain. Most are distributed with the following notice:
-The contents of this file are dedicated to the public domain. To
-the extent that dedication to the public domain is not available,
-everyone is granted a worldwide, perpetual, royalty-free,
-non-exclusive license to exercise all rights associated with the
-contents of this file for any purpose whatsoever.
-No rights are reserved.
+    # Separate nonce from ciphertext.
+    nonce     = ctext[:16]
+    ctext     = ctext[16:]
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
-BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
-ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-"""
+    # Convert hexadecimal key to binary data.
+    key       = binascii.unhexlify(hex_key)
 
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
+    # n.o. keystream blocks equals the n.o. ctext blocks.
+    ct_array  = [ctext[i:i + 16] for i in range(0, len(ctext), 16)]
 
-try:
-    import Crypto.Random.random
-    secure_random = Crypto.Random.random.getrandbits
+    keystream = ''
+    counter   = 1
+    i         = 0
+    iv_list   = []
 
-except ImportError:
-    import OpenSSL
-    print 'WARNING Failed to import Crypto.Random, trying OpenSSL instead.'
-    secure_random = lambda x: long(hexlify(OpenSSL.rand.bytes(x>>3)), 16)
+    while i < len(ct_array):
 
+        # Prepend counter with zeros.
+        ctr = str(counter).zfill(16)
 
+        iv  = ''
 
-def write_nonce(nonce):
-    with open('usedNonces.tfc', 'a+') as file:
-        file.write(base64_encode(nonce) + '\n')
+        # XOR 128-bit nonce with the counter to create IV of Twofish cipher.
+        if len(ctr) == 16 and len(nonce) == 16:
+            iv = ''.join(chr(ord(c) ^ ord(n)) for c, n in zip(ctr, nonce))
+        else:
+            exit_with_msg('CRITICAL ERROR! M(twofish_decrypt): Twofish counter hash - nonce length mismatch.')
 
+        # Check IV was not already used.
+        if iv in iv_list:
+            exit_with_msg('CRITICAL ERROR! M(twofish_decrypt): Twofish IV was used twice.')
+        else:
+            iv_list.append(iv)
 
+        # Initialize Twofish cipher with key.
+        twofish    = Twofish(key)
 
-def nonce_is_blacklisted(nonce):
-    b64Nonce = base64_encode(nonce)
+        # Encrypt unique IV with key.
+        key_block  = twofish.encrypt(iv)
+
+        # Append new block to keystream.
+        keystream += key_block
+
+        # Increase the counter of randomized CTR mode.
+        counter   += 1
+
+        i += 1
+
+    # Double check IV is not used twice.
     try:
-        with open('usedNonces.tfc', 'r') as file:
-            for line in file:
-                if b64Nonce in line:
-                    return True
-            return False
+        seen = set()
+        assert not any(i in seen or seen.add(i) for i in iv_list)
 
-    except IOError:
-        return False
+    except AssertionError:
+        exit_with_msg('CRITICAL ERROR! M(twofish_decrypt): Twofish IV was used twice.')
+
+    plaintext = ''
+
+    # XOR keystream with ciphertext to acquire plaintext.
+    if len(ctext) == len(keystream):
+        plaintext = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(ctext, keystream))
+    else:
+        exit_with_msg('CRITICAL ERROR! M(twofish_decrypt): Twofish ciphertext - keystream length mismatch.')
+
+    # Remove padding.
+    plaintext = plaintext[:-ord(plaintext[-1:])]
+
+    return plaintext
 
 
+def self_test_twofish_ctr():
+    """
+    Run Twofish CTR mode self test.
 
-def AES_GCM_encrypt(plaintext, hexKey):
+    :return: None.
+    """
+
+    print 'Twofish-CTR self test initializated'
+    test_pt  = 'Twofish CTR initialization test'
+    test_key = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'
+    test_ct  = twofish_encrypt(test_pt, test_key)
+    dec_pt   = twofish_decrypt(test_ct, test_key)
+
+    if test_pt != dec_pt:
+        exit_with_msg('CRITICAL ERROR! Twofish CTR self test failed.')
+    else:
+        print 'Twofish-CTR self test successful'
+        return None
+
+
+# AES-GCM
+def aes_gcm_encrypt(plaintext, hex_key):
+    """
+    Encrypt plaintext with AES in GCM mode.
+
+    :param plaintext: Input to be encrypted.
+    :param hex_key:   Independent 256-bit encryption key.
+    :return:          AES ciphertext.
+
+    AES in GCM mode is used as the outermost encryption layer
+    as it provides integrity for previous layers of cascaded
+    encryption.
+
+    GCM-mode AES allows encryption of up to 2^39 bits of plaintext
+    for each IV-key pair. The standard length for 'plaintext' is
+    1920 bits. The AES implementation uses a 256-bit symmetric key
+    together with 512-bit IV that is loaded from /dev/urandom.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(plaintext, str) and isinstance(hex_key, str)):
+        exit_with_msg('CRITICAL ERROR! M(aes_gcm_encrypt): Wrong input type.')
 
     # Convert hex key to binary format.
-    AESkey     = binascii.unhexlify(hexKey)
+    key        = binascii.unhexlify(hex_key)
 
-    # Generate 512 bit nonce.
-    nonce      = get_random_bytes(64)
-
-    # Verify that nonce has not been used before.
-    while nonce_is_blacklisted(nonce):
-        nonce  = get_random_bytes(64)
-
-    # Write nonce value.
-    write_nonce(nonce)
+    # Generate a 512 bit nonce.
+    nonce      = os.urandom(64)
 
     # Initialize cipher.
-    cipher     = AES.new(AESkey, AES.MODE_GCM, nonce)
+    cipher     = AES.new(key, AES.MODE_GCM, nonce)
     cipher.update('')
 
-    ctArray    = nonce, cipher.encrypt(plaintext), cipher.digest()
-    ciphertext = ''
+    # Encrypt the plaintext.
+    ct_list    = nonce, cipher.encrypt(plaintext), cipher.digest()
 
-    # Convert ciphertext array to string.
-    for i in ctArray:
-        ciphertext += i
+    # Convert ciphertext list to string.
+    ciphertext = ''.join(ct_list)
 
     return ciphertext
 
 
+def aes_gcm_decrypt(ctext, hex_key):
+    """
+    Decrypt and authenticate ciphertext with AES in GCM mode. (Used in Tx.py for self testing.)
 
-######################################################################
-#                    ENCRYPTION AND KEY MANAGEMENT                   #
-######################################################################
+    :param ctext:   Encrypted test string.
+    :param hex_key: 256-bit self-test encryption key.
+    :return:        Plaintext to be compared.
+    """
 
-def get_keyset(xmpp, output=True):
+    # Verify input parameter types.
+    if not (isinstance(ctext, str) and isinstance(hex_key, str)):
+        exit_with_msg('CRITICAL ERROR! M(aes_gcm_decrypt): Wrong input type.')
+
+    nonce      = ctext[:64]
+    ciphertext = ctext[64:-16]
+    mac        = ctext[-16:]
+    aes_key    = binascii.unhexlify(hex_key)
+
+    # Initialize cipher.
+    cipher     = AES.new(aes_key, AES.MODE_GCM, nonce)
+    cipher.update('')
+
+    # Decrypt the ciphertext.
+    plaintext  = cipher.decrypt(ciphertext)
+
+    # Verify the MAC.
     try:
-        keySet = []
+        cipher.verify(mac)
+        return plaintext
 
-        with open(xmpp + '.e', 'r') as file:
-            keyFile = file.readlines()
+    except ValueError:
+        return 'MAC_FAILED'
 
-        for line in keyFile:
-            key = line.strip('\n')
-
-            # Verify keys in keyfile have proper hex-format.
-            validChars = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A',
-                          'B', 'C', 'D', 'E', 'F', 'a', 'b', 'c', 'd', 'e', 'f']
-
-            for char in key:
-                if not char in validChars:
-                    exit_with_msg('CRITICAL ERROR! Illegal char \'' + str(char) + '\' in keyfile\n' + xmpp + '.e.')
+    except TypeError:
+        return 'MAC_FAILED'
 
 
-            # Verify keys are of proper length.
-            if len(key) != 64:
-                exit_with_msg('CRITICAL ERROR! Illegal length key in keyfile\n' + xmpp + '.e. Exiting.')
-            else:
-                keySet.append(key)
+def self_Test_aes_gcm():
+    """
+    Run AES GCM mode self test.
 
-        # Verify that four keys were loaded.
-        if len(keySet) != 4:
-            exit_with_msg('CRITICAL ERROR! Keyfile ' + xmpp + '.e\nhas illegal number of keys.')
+    :return: None.
+    """
 
-        # Verify that all keys are unique.
-        if any(keySet.count(key) > 1 for key in keySet):
-            exit_with_msg('CRITICAL ERROR! Two identical keys in keyfile\n' + xmpp + '.e.')
+    print 'AES_GCM     self test initializated'
+    test_pt  = 'AES_GCM initialization test'
+    test_key = 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'
+    test_ct  = aes_gcm_encrypt(test_pt, test_key)
+    dec_pt   = aes_gcm_decrypt(test_ct, test_key)
 
-        if debugging and output:
-            print '\nM(get_keyset): Loaded following set of keys for XMPP' + xmpp + '\n'
-            for key in keySet:
-                print key
+    if dec_pt == 'MAC_FAILED':
+        exit_with_msg('CRITICAL ERROR! AES_GCM (authentication) self test failed.')
 
-        return keySet
-
-    except IOError:
-        exit_with_msg('CRITICAL ERROR! Failed to open keyfile for XMPP\n' + xmpp + '.')
+    if test_pt != dec_pt:
+        exit_with_msg('CRITICAL ERROR! AES_GCM (encryption) self test failed.')
+    else:
+        print 'AES_GCM     self test successful'
+        return None
 
 
+# Cascading encryption.
+def quad_encrypt(xmpp, pt):
+    """
+    Encrypt plaintext with set of ciphers.
 
-def rotate_keyset(xmpp):
-    try:
+    :param xmpp: The contact's XMPP-address (i.e. alice@jabber.org).
+    :param pt:   Plaintext message to be encrypted.
+    :return:     The outermost ciphertext and it's nonce.
 
-        keySet  = get_keyset(xmpp, False)
+    Symmetric algorithms have not been proven secure. Based on the
+    recommendations of the technical community including E. Snowden*,
+    the symmetric encryption version uses a set of symmetric ciphers
+    with different internal structures. This way the attacker would
+    need to have attacks against several cryptographic primitives.
 
-        newKeys = []
-        with open(xmpp + '.e', 'w+') as file:
-            for key in keySet:
-                newKey = keccak_256(key)
-                newKeys.append(newKey)
-                file.write(newKey + '\n')
+    * https://www.youtube.com/watch?v=7Ui3tLbzIgQ#t=12m40s
 
-        if debugging:
-            print '\nM(rotate_keyset): Wrote following keys for contact ' + xmpp + '\n'
-            for key in newKeys:
-                print key
+    Each cipher uses an independent 256-bit symmetric key yielding a
+    total of 1024 bits of security, while at the same time providing
+    perfect forward secrecy: By hashing the used encryption key with
+    Keccak-256 (SHA3) immediately after use, previous key is deleted.
+    """
 
-        # Verify that keys were successfully written.
-        storedKeySet = get_keyset(xmpp, False)
+    # Verify input parameter types.
+    if not (isinstance(xmpp, str) and isinstance(pt, str)):
+        exit_with_msg('CRITICAL ERROR! M(encrypt): Wrong input type.')
 
-        if newKeys != storedKeySet:
-            exit_with_msg('CRITICAL ERROR! Next keyset was not properly stored.')
+    # Load key set.
+    k_s = get_keyset(xmpp)
 
-        else:
-            if debugging:
-                print '\nM(rotate_keyset): Key overwriting successful.\n'
-
-    except IOError:
-        exit_with_msg('CRITICAL ERROR! Keyfile ' + xmpp + '.e\ncould not be loaded.')
-
-
-
-def encrypt(xmpp, pt):
-
-    keySet  = get_keyset(xmpp)
-
-    ct1 = keccak_encrypt  (pt,  keySet[0])
-    ct2 = salsa_20_encrypt(ct1, keySet[1])
-    ct3 = twofish_encrypt (ct2, keySet[2])
-    ct4 = AES_GCM_encrypt (ct3, keySet[3])
+    # Encrypt the plaintext.
+    ct1 = keccak_encrypt(pt, k_s[0])
+    ct2 = salsa20_encrypt(ct1, k_s[1])
+    ct3 = twofish_encrypt(ct2, k_s[2])
+    ct4 = aes_gcm_encrypt(ct3, k_s[3])
 
     rotate_keyset(xmpp)
 
     return ct4
 
 
+# TFC-CEV self testing.
+def tfc_cev_self_test():
+    """
+    Run TFC encryption self tests.
 
-######################################################################
-#                        txc.tfc MANAGEMENT                          #
-######################################################################
+    :return: None.
 
-def add_contact(nick, xmpp):
+    Test each Keccak hash function and all encryption implementations
+    to detect errors in libraries / methods. Exit gracefully in case
+    errors occur.
+    """
+
+    os.system('clear')
+    print 'TFC-CEV %s || Tx.py || Running self tests...\n' % version
+
+    # Run self tests.
+    self_test_keccak_ctr()
+    self_test_salsa20()
+    self_test_twofish_ctr()
+    self_Test_aes_gcm()
+
+    print '\nAll tests successful.\n'
+    time.sleep(0.5)
+    os.system('clear')
+
+    return None
+
+
+def rotate_keyset(xmpp):
+    """
+    Rotate next set of keys by replacing the key with it's Keccak256 digest.
+    This operation removes previous keys providing perfect forward secrecy.
+
+    :param xmpp: The contact's XMPP-address (i.e. alice@jabber.org).
+    :return:     None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(xmpp, str):
+        exit_with_msg('CRITICAL ERROR! M(rotate_keyset): Wrong input type.')
+
+    keyset   = get_keyset(xmpp, output=False)
+    new_keys = []
+
     try:
-        with open('txc.tfc', 'a+') as file:
-                file.write(nick + ',' + xmpp + ',1\n')
-
-        if debugging:
-            print '\nM(add_contact): Added contact ' + nick + ' (xmpp = ' + xmpp + ') to txc.tfc\n'
+        with open('tx.' + xmpp + '.e', 'w+') as f:
+            for key in keyset:
+                new_key = keccak256(key)
+                new_keys.append(new_key)
+                f.write(new_key + '\n')
 
     except IOError:
-        exit_with_msg('ERROR! txc.tfc could not be loaded.')
+        exit_with_msg("CRITICAL ERROR! M(rotate_keyset): Keyfile 'tx.%s.e' could not be loaded" % xmpp)
 
+    # Print list of written keys (for debugging purposes).
+    if debugging:
+        print "\nM(rotate_keyset): Wrote following keys to keyfile 'tx.%s.e':\n" % xmpp
+        for key in new_keys:
+            print key
+        print '\n'
 
+    # Verify that keys were successfully written.
+    if new_keys != get_keyset(xmpp, output=False):
+        exit_with_msg('CRITICAL ERROR! M(rotate_keyset): Next keyset was not properly stored.')
 
-def write_nick(xmpp, nick):
-    try:
-        contacts = []
+    if debugging:
+        print '\nM(rotate_keyset): Key overwriting successful.\n'
 
-        with open('txc.tfc', 'r') as file:
-            csvData = csv.reader(file)
-
-            for row in csvData:
-                contacts.append(row)
-
-        nickChanged = False
-
-        for i in range(len(contacts)):
-            if contacts[i][1] == xmpp:
-                contacts[i][0] = nick
-                nickChanged = True
-
-        if not nickChanged:
-            exit_with_msg('ERROR! Could not find XMPP\n' + xmpp + ' from txc.tfc.')
-
-
-        with open('txc.tfc', 'w') as file:
-            writer = csv.writer(file)
-            writer.writerows(contacts)
-
-        if debugging:
-            print '\nM(write_nick):\nWrote nick ' + nick + ' for account ' + xmpp + ' to txc.tfc\n'
-
-    except IOError:
-        exit_with_msg('ERROR! txc.tfc could not be loaded.')
-
-
-
-def get_nick(xmpp):
-    try:
-        contacts = []
-
-        with open('txc.tfc', 'r') as file:
-            csvData = csv.reader(file)
-
-            for row in csvData:
-                contacts.append(row)
-
-        for i in range(len(contacts)):
-            if contacts[i][1] == xmpp:
-                nick = contacts[i][0]
-                return nick
-
-        exit_with_msg('ERROR! Failed to load nick for contact.')
-
-    except IOError:
-        exit_with_msg('ERROR! txc.tfc could not be loaded.')
-
-
-
-def write_keyID(xmpp, keyID):
-    try:
-        contacts = []
-
-        with open('txc.tfc', 'r') as file:
-            csvData = csv.reader(file)
-
-            for row in csvData:
-                contacts.append(row)
-
-        keyIDChanged = False
-
-        for i in range(len(contacts)):
-            if contacts[i][1] == xmpp:
-                contacts[i][2] = keyID
-                keyIDChanged   = True
-
-        if not keyIDChanged:
-            exit_with_msg('ERROR! Could not find XMPP\n' + xmpp + ' from txc.tfc.')
-
-        with open('txc.tfc', 'w') as file:
-            writer = csv.writer(file)
-            writer.writerows(contacts)
-
-        # Verify keyID has been properly written.
-        newStoredKey = get_keyID(xmpp)
-        if keyID != newStoredKey:
-            exit_with_msg('CRITICAL ERROR! KeyID was not properly stored.')
-
-
-        if debugging:
-            print '\nM(write_keyID): Wrote line \'' + str(keyID) + '\' for contact ' + xmpp + ' to txc.tfc\n'
-
-    except IOError:
-        exit_with_msg('ERROR! txc.tfc could not be loaded.')
-
-
-
-def get_keyID(xmpp):
-    try:
-        contacts = []
-
-        with open('txc.tfc', 'r') as file:
-            csvData = csv.reader(file)
-
-            for row in csvData:
-                contacts.append(row)
-
-        for i in range(len(contacts)):
-            if contacts[i][1] == xmpp:
-                keyID = int(contacts[i][2])
-
-        # Verify keyID is positive.
-        if keyID > 0:
-            return keyID
-        else:
-            exit_with_msg('ERROR! Failed to load valid keyID for XMPP\n' + xmpp + '.')
-
-    except ValueError:
-        exit_with_msg('ERROR! Failed to load valid keyID for XMPP\n' + xmpp + '.')
-
-    except IOError:
-        exit_with_msg('ERROR! txc.tfc could not be loaded. Exiting.')
-
-
-
-def add_keyfiles(keyFileNames):
-    try:
-        contacts = []
-
-        with open('txc.tfc', 'a+') as file:
-            csvData = csv.reader(file)
-
-            for row in csvData:
-                contacts.append(row)
-
-        for fileName in keyFileNames:
-            onList = False
-            xmpp   = fileName[:-2]
-
-            for user in contacts:
-                if xmpp in user[1]:
-                    onList = True
-
-            if not onList:
-
-                if xmpp == 'tx.local':
-                    add_contact('tx.local', 'tx.local')
-
-                else:
-                    os.system('clear')
-                    print 'TFC ' + version + ' || Tx.py' + '\n'
-                    newNick = raw_input('New contact ' + xmpp[3:] + ' found. Enter nick: ')
-                    add_contact(newNick, xmpp)
-
-    except IOError:
-        exit_with_msg('ERROR! txc.tfc could not be loaded.')
-
+    return None
 
 
 ######################################################################
-#                             GETTERS                                #
+#                            KEY MANAGEMENT                          #
 ######################################################################
 
-def get_keyfile_list():
-    keyFileList     = []
-    xmppAddressList = []
+def get_keyfile_list(local=False):
+    """
+    Get list of 'tx.xmpp.e' keyfiles in Tx.py directory
 
-    for file in os.listdir('.'):
-        if file.endswith('.e'):
-            if not file.startswith('me.') and not file.startswith('rx.'):
-                keyFileList.append(file)
-                xmppAddressList.append(file[3:][:-2])
-    return keyFileList, xmppAddressList
+    :return: List of keyfiles.
+    """
 
+    kf_list  = []
+
+    if local:
+        kf_list += [f for f in os.listdir('.') if (f.startswith('tx.') and f.endswith('.e'))]
+    else:
+        kf_list += [f for f in os.listdir('.') if (f.startswith('tx.') and f.endswith('.e') and f != 'tx.local.e')]
+
+    return kf_list
+
+
+def search_keyfiles():
+    """
+    Check that at least one keyfile exists in Tx.py directory.
+
+    :return: None.
+
+    Remove instructions from end of keyfiles.
+    Issue a warning if no keyfiles are found.
+    """
+
+    # Remove possible instruction from file names.
+    for f in os.listdir('.'):
+        if f.startswith('tx.') and f.endswith('.e - Move this file to your TxM'):
+            os.rename(f, f[:-29])
+
+    # If loaded keyfile list is empty, exit.
+    if not get_keyfile_list():
+        exit_with_msg('Error: No keyfiles for contacts were found.\nMake sure keyfiles are in same directory as Tx.py.')
+    return None
+
+
+def get_keyset(xmpp, output=True):
+    """
+    Load set of keys for selected contact.
+
+    :param xmpp:   The contact's XMPP-address (i.e. alice@jabber.org).
+    :param output: When output and debugging is True, print encryption keys.
+    :return:       The set of three one time keys.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(xmpp, str) and isinstance(output, bool)):
+        exit_with_msg('CRITICAL ERROR! M(get_keyset): Wrong input type.')
+
+    try:
+        keyset = []
+
+        with open('tx.' + xmpp + '.e') as f:
+            key_file = f.readlines()
+
+        for line in key_file:
+            key = line.strip('\n')
+
+            # Verify keys in keyfile have proper hex-format.
+            valid_chars = ['0', '1', '2', '3',
+                           '4', '5', '6', '7',
+                           '8', '9', 'A', 'B',
+                           'C', 'D', 'E', 'F',
+                           'a', 'b', 'c', 'd',
+                           'e', 'f',]
+
+            for c in key:
+                if c not in valid_chars:
+                    exit_with_msg("CRITICAL ERROR! M(get_keyset): Illegal character '%s' in keyfile 'tx.%s.e'." % (c, xmpp))
+
+            # Verify keys are of proper length.
+            if len(key) != 64:
+                exit_with_msg("CRITICAL ERROR! M(get_keyset): Illegal length key in keyfile 'tx.%s.e" % xmpp)
+            else:
+                keyset.append(key)
+
+    except IOError:
+        exit_with_msg("CRITICAL ERROR! M(get_keyset): Failed to open keyfile 'tx.%s.e'" % xmpp)
+
+    # Verify that four keys were loaded.
+    if len(keyset) != 4:
+        exit_with_msg("CRITICAL ERROR! M(get_keyset): Keyfile 'tx.%s.e' did not contain four keys." % xmpp)
+
+    # Verify that all keys are unique.
+    if any(keyset.count(k) > 1 for k in keyset):
+        exit_with_msg("CRITICAL ERROR! M(get_keyset): Two or more identical keys in keyfile 'tx.%s.e" % xmpp)
+
+    # Print list of keys (for debugging purposes).
+    if debugging and output:
+        print "\nM(get_keyset): Loaded following set of keys for XMPP '%s':\n" % xmpp
+        for key in keyset:
+            print key
+        print '\n'
+
+    return keyset
+
+
+######################################################################
+#                           SECURITY RELATED                         #
+######################################################################
+
+def chk_pkg_size():
+    """
+    Due to padding implementation, the max size of packet is 255.
+    Due to TFC noise message length, the min size of packet is 15.
+
+    :return: None.
+    """
+
+    if pkg_size > 250:
+        exit_with_msg("ERROR! Maximum length of packet is 250 characters.\n"
+                      "Please fix the value 'pkg_size'and restart TFC.")
+
+    if pkg_size < 15:
+        exit_with_msg("ERROR! Minimum length of packet is 25 characters.\n"
+                      "Please fix the value 'pkg_size' and restart TFC.")
+    return None
+
+
+def ct_sleep():
+    """
+    Sleep constant time + jitter to obfuscate
+    slight variances in function processing times.
+
+    If random_sleep is enabled, sleep random amount.
+
+    :return: None.
+    """
+
+    time.sleep(ct_static_sleep / 2.0)
+    time.sleep(random.uniform(jitter_min, jitter_max))
+
+    if random_sleep:
+        time.sleep(random.uniform(0, max_sleep_time))
+
+    return None
+
+
+def exit_with_msg(message):
+    """
+    Exit Tx.py with message.
+
+    :param message: Message to display when exiting.
+    :return:        None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(message, str):
+        print '\nCRITICAL ERROR! M(exit_with_msg): Wrong input type.\nExiting TFC-CEV.\n'
+    else:
+        os.system('clear')
+        print '\n%s\n\nExiting TFC-CEV.\n\n' % message
+
+    if c_transmission and not local_testing:
+        subprocess.Popen('killall python', shell=True).wait()
+    else:
+        exit()
+
+
+######################################################################
+#                         CONTACT MANAGEMENT                         #
+######################################################################
+
+def change_recipient(parameter):
+    """
+    Change global xmpp and nick variables to change recipient.
+
+    :param parameter: Recipients nick that needs to be separated from command.
+    :return:          None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(parameter, str):
+        exit_with_msg('CRITICAL ERROR! M(change_recipient): Wrong input type.')
+
+    global xmpp
+    global nick
+    global group
+
+    new_recipient = parameter.split(' ')[1]
+
+    if new_recipient in get_list_of_xmpp_addr():
+        xmpp  = new_recipient
+        nick  = get_nick(new_recipient)
+        group = ''
+        os.system('clear')
+        print "\nNow sending messages to '%s' (%s)\n" % (nick, new_recipient)
+        return None
+
+    elif new_recipient in get_list_of_groups():
+
+        if c_transmission:
+            print '\nError: Groups are disabled when constant transmission is enabled.\n'
+            time.sleep(1.5)
+            return None
+
+        group = new_recipient
+        nick  = group
+        os.system('clear')
+        print "\nNow sending messages to group '%s'\n" % nick
+        if not get_group_members(group):
+            print 'The selected group is empty.\n'
+        return None
+
+    else:
+        try:
+            xmpp, nick = select_contact(0, new_recipient, False)
+            group      = ''
+            os.system('clear')
+            print "\nNow sending messages to '%s' (%s)\n" % (nick, xmpp)
+            return None
+
+        except IndexError:
+            print '\nError: Invalid contact / group selection.\n'
+            return None
+
+        except ValueError:
+            print '\nError: Invalid contact / group selection.\n'
+            return None
 
 
 def get_contact_quantity():
+    """
+    Get the number of contacts, excludes tx.local.e file if found.
+
+    :return: return number of contacts as an integer.
+    """
+
+    i = 0
     try:
-        with open('txc.tfc', 'r') as file:
-            for i, l in enumerate(file):
+        with open('txc.tfc') as f:
+            for i, l in enumerate(f):
                 pass
 
-            for line in file:
-                    if 'tx.local' in line:
+            for line in f:
+                    if 'local,local,' in line:
                         return i
         return i + 1
 
@@ -1220,61 +1466,417 @@ def get_contact_quantity():
         exit_with_msg('ERROR! txc.tfc could not be loaded.')
 
 
+def get_list_of_xmpp_addr():
+    """
+    Get list of available contact XMPP-addresses.
 
-def get_autotabs(contacts):
+    :return: List of XMPP-addresses.
+    """
 
-    autoTabs = []
+    xmpp_a_list  = []
+    xmpp_a_list += [f[3:][:-2] for f in os.listdir('.') if (f.startswith('tx.') and f.endswith('.e') and f != 'tx.local.e')]
 
-    # Add contacts to autoTabs.
-    for contact in contacts:
-        autoTabs.append(contact + ' ')
-
-    # Add group names to autoTabs.
-    gFileList = get_group_list(False)
-    for gFile in gFileList:
-        autoTabs.append(gFile + ' ')
-
-    # Add commands to autoTabs.
-    cList = ['about' , 'add '  , 'clear', 'create ' , 'exit',
-             'file ' , 'group ', 'help' , 'logging ', 'msg ',
-             'newkf ', 'nick ' , 'quit' , 'rm '     , 'select ',
-             'store ']
-
-    for command in cList:
-        autoTabs.append(command)
-
-    return autoTabs
+    return xmpp_a_list
 
 
+def print_contact_list(spacing=False):
+    """
+    Print list of available contacts and their nicknames.
 
-def get_terminal_width():
-    return int(subprocess.check_output(['stty', 'size']).split()[1])
+    :param spacing: When spacing is True, add spacing around the printed table.
+    :return:        ID header offset so select_contact() knows where to place caret. OR
+                    None for cases when user gives command '/names' to print the list.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(spacing, bool):
+        exit_with_msg('CRITICAL ERROR! M(print_contact_list): Wrong input type.')
+
+    if spacing:
+        os.system('clear')
+        print ''
+
+    tty_width = get_terminal_width()
+    headers   = ['XMPP-address', 'ID', 'Nick']
+
+    xmpp_list = get_list_of_xmpp_addr()
+    gap1      = len(max(xmpp_list, key=len)) - len(headers[0]) + 3
+    header    = headers[0] + gap1 * ' ' + headers[1] + '  ' + headers[2]
+    c_dst     = int(header.index(headers[1][0]))
+
+    print header + '\n' + tty_width * '-'
+
+    for c in xmpp_list:
+        sel_id = xmpp_list.index(c)
+        nick   = get_nick(c)
+
+        if nick != 'local':
+            gap2 = int(header.index(headers[1][0])) - len(c)
+            gap3 = int(header.index(headers[2][0])) - len(c) - gap2 - len(str(sel_id))
+            print c + gap2 * ' ' + str(sel_id) + gap3 * ' ' + nick
+
+    print '\n'
+
+    if spacing:
+        print ''
+        return None
+
+    else:
+        return c_dst
 
 
+def select_contact(caret_dist=0, contact_no='', menu=True):
+    """
+    Select contact to send messages to.
 
-######################################################################
-#                        CHECKS AND WARNINGS                         #
-######################################################################
+    :param caret_dist: Location of caret when choosing contact.
+    :param contact_no: Contact selection number.
+    :param menu:       When true, display menu.
+    :return:           XMPP-address and nickname.
+    """
 
-def search_keyfiles():
-    keyfiles  = []
-    keyfiles += [file for file in os.listdir('.') if file.endswith('.e')]
-    if not keyfiles:
-        exit_with_msg('Error: No keyfiles for contacts were found.\n'
-                      'Make sure keyfiles are in same directory as Tx.py.')
+    # Verify input parameter types.
+    if not (isinstance(caret_dist, (int, long)) and isinstance(contact_no, str) and isinstance(menu, bool)):
+        exit_with_msg('CRITICAL ERROR! M(select_contact): Wrong input type.')
+
+    c_selected = False
+    xmpp       = ''
+    nick       = ''
+
+    while not c_selected:
+        try:
+            # If no parameter about contact selection
+            # is passed to function, ask for input.
+            if contact_no == '':
+                selection  = raw_input('Select contact:' + (caret_dist - 15) * ' ')
+
+                # If user enters xmpp instead of ID, select using it.
+                selection  = ' '.join(selection.split())
+
+                if selection in get_list_of_xmpp_addr():
+                    nick = get_nick(selection)
+                    return selection, nick
+
+                int_selection = int(selection)
+            else:
+                int_selection = int(contact_no)
+
+        # Error handling if selection was not a number.
+        except ValueError:
+            if menu:
+                os.system('clear')
+                print "TFC-CEV %s || Tx.py\n\nError: Invalid selection '%s'\n" % (version, selection)
+                print_contact_list()
+                continue
+            else:
+                raise ValueError('Invalid number')
+
+        # Clean exit.
+        except KeyboardInterrupt:
+            exit_with_msg('')
+
+        # Check that integer is within allowed bounds.
+        if (int_selection < 0) or (int_selection > get_contact_quantity()):
+            if menu:
+                os.system('clear')
+                print "TFC-CEV %s || Tx.py\n\nError: Invalid selection '%s'\n" % (version, selection)
+                print_contact_list()
+                continue
+            else:
+                raise ValueError('Invalid number')
+
+        # Check that selction number was valid.
+        try:
+            xmpp = get_list_of_xmpp_addr()[int_selection]
+        except IndexError:
+            if menu:
+                os.system('clear')
+                print "TFC-CEV %s || Tx.py\n\nError: Invalid selection '%s'\n" % (version, selection)
+                print_contact_list()
+                continue
+            else:
+                print '\nError: Invalid contact selection\n'
+
+        nick = get_nick(xmpp)
+
+        # Check that user has not selected local contact.
+        if xmpp == 'local':
+            if menu:
+                contact_no = ''
+                os.system('clear')
+                print "TFC-CEV %s || Tx.py\n\nError: Invalid selection '%s'\n" % (version, selection)
+                print_contact_list()
+                continue
+            else:
+                raise ValueError('Invalid number')
+
+        c_selected = True
+
+    return xmpp, nick
 
 
+def get_list_of_targets():
+    """
+    Targets are the labels to witch messages
+    are sent to: Nicknames and group names.
 
-def chk_pkgSize():
-    if PkgSize > 250:
-        exit_with_msg('ERROR! Maximum length of packet is 250 characters.\n'
-              'Please fix the value \'PkgSize\'and restart TFC.')
+    :return: List of targets.
+    """
+
+    nick_list = []
+    for i in get_list_of_xmpp_addr():
+        nick_list.append(get_nick(i))
+
+    for n in get_list_of_groups():
+        nick_list.append(n)
+
+    return nick_list
 
 
-    if PkgSize < 25:
-        exit_with_msg('ERROR! Minimum length of packet is 25 characters.'
-                      '\nPlease fix the value \'PkgSize\' and restart TFC.')
+# txc.tfc MANAGEMENT
+def add_contact(nick, xmpp):
+    """
+    Add new contact to txc.tfc.
 
+    :param nick: Nick of new contact.
+    :param xmpp: The contact's XMPP-address (i.e. alice@jabber.org).
+    :return:     None.
+
+    Contacts are stored in CSV file. Each contact has it's own
+    line, and settings are stored as [nick, XMPP-addr, keyID].
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(nick, str) and isinstance(xmpp, str)):
+        exit_with_msg('CRITICAL ERROR! M(add_contact): Wrong input type.')
+
+    try:
+        with open('txc.tfc', 'a+') as f:
+                f.write('%s,%s,1\n' % (nick, xmpp))
+
+    except IOError:
+        exit_with_msg('ERROR! M(add_contact): txc.tfc could not be loaded.')
+
+    if debugging:
+        print '\nM(add_contact): Added contact %s (XMPP-addr = %s) to txc.tfc.\n' % (nick, xmpp)
+
+    return None
+
+
+def add_keyfiles():
+    """
+    Prompt nick names for new contacts / keyfiles and store them to txc.tfc.
+
+    :return: None.
+    """
+
+    c_list = []
+
+    try:
+        with open('txc.tfc', 'a+') as f:
+            for row in csv.reader(f):
+                c_list.append(row)
+
+    except IOError:
+        exit_with_msg('ERROR! txc.tfc could not be loaded.')
+
+    for kf in get_keyfile_list(local=True):
+        existing = False
+        xmpp     = kf[3:][:-2]
+
+        for c in c_list:
+            if xmpp in c[1]:
+                existing = True
+
+        if not existing:
+
+            if xmpp == 'local':
+                add_contact('local', 'local')
+
+            else:
+                os.system('clear')
+                print "TFC-CEV %s || Tx.py\n\nNew contact '%s' found." % (version, xmpp)
+
+                auto_nick = xmpp.split('@')[0]                    # Parse account name.
+                auto_nick = auto_nick[0].upper() + auto_nick[1:]  # Capitalize.
+                nick      = ''
+
+                try:
+                    nick = raw_input("\nGive nickname to contact or press enter to use '%s' as nick: " % auto_nick)
+                except KeyboardInterrupt:
+                    exit_with_msg('')
+
+                if nick == '':
+                    nick = auto_nick
+
+                if nick in get_list_of_groups():
+                    print 'Error: Group with same name alread exists.'
+                    nick = ''
+
+                add_contact(nick, xmpp)
+
+    return None
+
+
+def get_key_id(xmpp):
+    """
+    Get key ID for XMPP-contact.
+
+    :param xmpp: The contact's XMPP-address (i.e. alice@jabber.org).
+    :return:     The key ID (integer).
+
+    The loaded key ID is the counter that defines the number of times keys need
+    to be iterated through Keccak to produce current key. key_id is increased
+    by one after every encrypted message and the old key is destroyed.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(xmpp, str):
+        exit_with_msg('CRITICAL ERROR! M(get_key_id): Wrong input type.')
+
+    try:
+        c_list = []
+        key_id = 0
+
+        with open('txc.tfc') as f:
+            for row in csv.reader(f):
+                c_list.append(row)
+
+        for i in range(len(c_list)):
+            if c_list[i][1] == xmpp:
+                key_id = int(c_list[i][2])
+
+        # Verify key_id is positive.
+        if key_id > 0:
+            return key_id
+        else:
+            exit_with_msg("ERROR! M(get_key_id): Failed to load valid key_id for contact '%s'." % xmpp)
+
+    except ValueError:
+        exit_with_msg(    "ERROR! M(get_key_id): Failed to load valid key_id for contact '%s'." % xmpp)
+
+    except IOError:
+        exit_with_msg(    'ERROR! M(get_key_id): txc.tfc could not be loaded.')
+
+
+def get_nick(xmpp):
+    """
+    Load nick from txc.tfc.
+
+    :param xmpp: The contact's XMPP-address (i.e. alice@jabber.org).
+    :return:     The nickname for specified XMPP.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(xmpp, str):
+        exit_with_msg('CRITICAL ERROR! M(get_nick): Wrong input type.')
+
+    c_list = []
+
+    try:
+        with open('txc.tfc') as f:
+            for row in csv.reader(f):
+                c_list.append(row)
+
+    except IOError:
+        exit_with_msg('ERROR! M(get_nick): txc.tfc could not be loaded.')
+
+    for i in range(len(c_list)):
+        if c_list[i][1] == xmpp:
+            nick = c_list[i][0]
+
+            return nick
+
+    exit_with_msg("ERROR! M(get_nick): Failed to load nick for contact '%s'." % xmpp)
+
+
+def write_key_id(xmpp, keyid):
+    """
+    Write new key ID for contact to txc.tfc.
+
+    :param xmpp:  The contact's XMPP-address (i.e. alice@jabber.org).
+    :param keyid: The counter of message, defines the offset in keyfile.
+    :return:      None.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(xmpp, str) and isinstance(keyid, (int, long))):
+        exit_with_msg('CRITICAL ERROR! M(write_key_id): Wrong input type.')
+
+    try:
+        c_list = []
+
+        with open('txc.tfc') as f:
+            for row in csv.reader(f):
+                c_list.append(row)
+
+        xmpp_found = False
+
+        for i in range(len(c_list)):
+            if c_list[i][1] == xmpp:
+                xmpp_found   = True
+                c_list[i][2] = keyid
+
+        if not xmpp_found:
+            exit_with_msg("ERROR! M(write_key_id): Could not find contact '%s' from txc.tfc." % xmpp)
+
+        with open('txc.tfc', 'w') as f:
+            csv.writer(f).writerows(c_list)
+
+    except IOError:
+        exit_with_msg('ERROR! M(write_key_id): txc.tfc could not be loaded.')
+
+        # Verify key_id has been properly written.
+        new_stored_key = get_key_id(xmpp)
+        if keyid != new_stored_key:
+            exit_with_msg("CRITICAL ERROR! M(write_key_id): KeyID for contact '%s' was not properly stored to txc.tfc." % xmpp)
+
+        if debugging:
+            print "\nM(write_key_id): Wrote key ID '%s' for contact %s to txc.tfc\n" % (str(keyid), xmpp)
+
+    return None
+
+
+def write_nick(xmpp, nick):
+    """
+    Write new nick for contact to txc.tfc.
+
+    :param xmpp: The contact's XMPP-address (i.e. alice@jabber.org).
+    :param nick: New nick for contact.
+    :return:     None.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(xmpp, str) and isinstance(nick, str)):
+        exit_with_msg('CRITICAL ERROR! M(write_nick): Wrong input type.')
+
+    try:
+        c_list = []
+
+        with open('txc.tfc') as f:
+            for row in csv.reader(f):
+                c_list.append(row)
+
+        nick_changed = False
+
+        for i in range(len(c_list)):
+            if c_list[i][1] == xmpp:
+                c_list[i][0] = nick
+                nick_changed = True
+
+        if not nick_changed:
+            exit_with_msg("ERROR! M(write_nick): Could not find contact '%s' from txc.tfc." % xmpp)
+
+        with open('txc.tfc', 'w') as f:
+            csv.writer(f).writerows(c_list)
+
+        if debugging:
+            print "\nM(write_nick): Wrote nick '%s' for account '%s' to txc.tfc\n" % (nick, xmpp)
+
+    except IOError:
+        exit_with_msg('ERROR! M(write_nick): txc.tfc could not be loaded.')
+
+    return None
 
 
 ######################################################################
@@ -1282,1130 +1884,1597 @@ def chk_pkgSize():
 ######################################################################
 
 def base64_encode(content):
-    import base64
+    """
+    Encode string to base64.
+
+    :param content: String to be encoded.
+    :return:        Encoded string.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(content, str):
+        exit_with_msg('CRITICAL ERROR! M(base64_encode): Wrong input type.')
+
     return base64.b64encode(content)
 
 
-
 def crc32(content):
-    import zlib
+    """
+    Calculate CRC32 checksum of input.
+
+    :param content: Input checksum is calculated from.
+    :return:        CRC32 checksum of input.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(content, str):
+        exit_with_msg('CRITICAL ERROR! M(crc32): Wrong input type.')
+
     return str(hex(zlib.crc32(content)))
 
 
+def long_msg_preprocess(payload):
+    """
+    Prepare long messages for transmission in multiple parts.
+
+    :param payload: Long message to be transmitted in multiple parts.
+    :return:        Plaintext in array of 'pkgSize' sized packets.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(payload, str):
+        exit_with_msg('CRITICAL ERROR! M(long_msg_preprocess): Wrong input type.')
+
+    type_file = False
+    type_mesg = False
+
+    # Determine packet type:
+    if payload.startswith('m'):
+        type_mesg = True
+    elif payload.startswith('f'):
+        type_file = True
+    else:
+        exit_with_msg('CRITICAL ERROR! M(long_msg_preprocess): Unknown packet type detected.')
+
+    # Remove the {m,f} header and new lines.
+    payload = payload[1:].strip('\n')
+
+    # Strip leading white space.
+    while payload.startswith(' '):
+        payload = payload[1:]
+
+    # Append Keccak256 hash of message / file to packet.
+    str_hash = keccak256(payload)
+    payload += str_hash
+
+    # Split packet to list the items of which are 3 char shorter than max length:
+    # This leaves room for 2 char header and prevents dummy blocks when padding.
+    packet_a = [payload[i:i + (pkg_size - 3)] for i in range(0, len(payload), (pkg_size - 3))]
+
+    if type_mesg:                                  # All packets have header {s,l,a,e}{m,f}.
+        for i in xrange(len(packet_a)):
+            packet_a[i] = 'am' + packet_a[i]       # 'am' = appended message packets.
+        packet_a[-1]    = 'em' + packet_a[-1][2:]  # 'em' = end message packets.
+        packet_a[0]     = 'lm' + packet_a[0][2:]   # 'lm' = start of long message packets.
+
+    if type_file:
+        for i in xrange(len(packet_a)):
+            packet_a[i] = 'af' + packet_a[i]       # 'af' = appended file packets.
+        packet_a[-1]    = 'ef' + packet_a[-1][2:]  # 'ef' = end file packets.
+        packet_a[0]     = 'lf' + packet_a[0][2:]   # 'lf' = start of long file packets.
+
+    if debugging:
+        print '\nM(long_msg_preprocess): Processed long message to following packets:'
+        for item in packet_a:
+            print "'%s'\n" % item
+
+    return packet_a
+
 
 def padding(string):
-    length  = PkgSize - (len(string) % PkgSize)
+    """
+    Padd input to always match the pkg_size.
+
+    :param string: String to be padded.
+    :return:       Padded string.
+
+    Byte used in padding is determined by how much padding is needed.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(string, str):
+        exit_with_msg('CRITICAL ERROR! M(padding): Wrong input type.')
+
+    length  = pkg_size - (len(string) % pkg_size)
     string += length * chr(length)
 
     if debugging:
-        print '\nM(padding): Padded input to length of '+ str(len(string)) +' chars:\n"' + string + '"\n'
+        print '\nM(padding): Padded input to length of %s chars:\n"%s"\n' % (str(len(string)), string)
 
     return string
 
 
+######################################################################
+#                          ENCRYPTED COMMANDS                        #
+######################################################################
+
+
+def change_logging(parameters):
+    """
+    Send packet to Rx.py to enable / disable logging.
+
+    :param parameters: Command with it's parameters.
+    :return:           None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(parameters, str):
+        exit_with_msg('CRITICAL ERROR! M(change_logging): Wrong input type.')
+
+    # Check that local keyfile exists.
+    if not os.path.isfile('tx.local.e'):
+        print "\nError: Keyfile 'tx.local.e' was not found. Command was not sent.\n"
+
+    else:
+        parameters = ' '.join(parameters.split())
+        value      = str(parameters.split(' ')[1])
+
+        if value   == 'on':
+            command_transmit('LOGSON')
+        elif value == 'off':
+            command_transmit('LOGSOFF')
+        else:
+            print '\nError: Invalid command.\n'
+
+        return None
+
+
+def change_nick(xmpp, parameters):
+    """
+    Change global variable nick name to specified.
+
+    :param xmpp:       Target XMPP the nick of which is changed.
+    :param parameters: New nick name yet to be separated from command.
+    :return:           None.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(xmpp, str) and isinstance(parameters, str)):
+        exit_with_msg('CRITICAL ERROR! M(change_nick): Wrong input type.')
+
+    # Check that local keyfile exists.
+    if not os.path.isfile('tx.local.e'):
+        print "\nError: Keyfile 'tx.local.e' was not found. Command was not sent.\n"
+        return None
+
+    parameters = ' '.join(parameters.split())
+    new_nick   = parameters.split(' ')[1]
+
+    if group:
+        print "\nError: Group is selected. Can't change nick.\n"
+        return None
+
+    global nick
+
+    # Check that specified nick is acceptable.
+    if new_nick == '':
+        print "\nError: Can't give empty nick.\n"
+
+    elif new_nick == 'local':
+        print "\nError: Can't give local keyfile name as nick.\n"
+
+    elif '=' in new_nick or '/' in new_nick:
+        print "\nError: Nick can't not contain characters '/' or '='.\n"
+
+    elif new_nick in get_list_of_groups():
+        print '\nGroup is selected, no nick was changed.\n'
+
+    elif new_nick in get_list_of_xmpp_addr():
+        print "\nError: Nick can't be an XMPP-address.\n"
+
+    else:
+        write_nick(xmpp, new_nick)
+        nick    = get_nick(xmpp)
+
+        os.system('clear')
+        command_transmit('NICK me.%s %s'  % (xmpp, nick))
+        print '\nChanged %s nick to %s\n' % (xmpp, nick)
+
+    return None
+
+
+def clear_screens(xmpp):
+    """
+    Send clear screen to NH.py, Pidgin and Rx.py.
+
+    If constant transmission is enabled, send
+    encrypted clear screen command to Rx.py
+
+    :param xmpp: Target to clear pidgin screen from.
+    :return:     None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(xmpp, str):
+        exit_with_msg('CRITICAL ERROR! M(clear_screens): Wrong input type.')
+
+    if c_transmission:
+        # Check that local keyfile exists.
+        if not os.path.isfile('tx.local.e'):
+            print "\nError: Keyfile 'tx.local.e' was not found. Command was not sent.\n"
+            return None
+
+    if local_testing:
+        if c_transmission:
+            command_transmit('CLEARSCREEN')
+        else:
+            with open('TxOutput', 'w+') as f:
+                f.write('CLEARSCREEN ' + xmpp + '\n')
+
+    else:
+        if c_transmission:
+            command_transmit('CLEARSCREEN')
+        else:
+            port.write('CLEARSCREEN ' + xmpp + '\n')
+
+    os.system('clear')
+
+    return None
+
+
+def save_file(parameters):
+    """
+    Command Rx.py to store tmp keyfile as specified output name and file extension.
+
+    :param parameters: Temporary file name and final file name / reject command.
+    :return:           None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(parameters, str):
+        exit_with_msg('CRITICAL ERROR! M(save_file): Wrong input type.')
+
+    # Check that local keyfile exists.
+    if not os.path.isfile('tx.local.e'):
+        print "\nError: Keyfile 'tx.local.e' was not found. Command was not sent.\n"
+
+    params = parameters.split(' ')
+
+    if params[1] == 'list':
+        command_transmit('STOREFILE PRINT LIST')
+        return None
+
+    try:
+        command_transmit('STOREFILE %s %s' % (str(params[1]), str(params[2])))
+
+    except IndexError:
+        print '\nError: Invalid command.\n'
+
+    return None
+
 
 ######################################################################
-#                         MESSAGE TRANSMISSION                       #
+#                COMMAND / MESSAGE / FILE TRANSMISSION               #
 ######################################################################
 
-def long_msg_preprocess(string):
+def command_transmit(command):
+    """
+    Send commands to RxM via RS232 interface.
 
-    preprocessFile = False
-    preprocessMsg  = False
+    :param command: The plaintext command.
+    :return:        None.
+    """
 
-    # Strip leading white space.
-    while string.startswith(' '):
-        string = string[1:]
+    # Verify input parameter type.
+    if not isinstance(command, str):
+        exit_with_msg('CRITICAL ERROR! M(command_transmit): Wrong input type.')
 
-    # Remove 'm' from start of string.
-    if string.startswith('m'):
-        preprocessMsg = True
-    if string.startswith('f'):
-        preprocessFile = True
+    key_id      = get_key_id('local')
 
-    # Remove new lines and 'm' or 'f' header.
-    string  = string[1:].strip('\n')
+    padded_cmd  = padding(command)
+    ct_with_tag = quad_encrypt('local', padded_cmd)
 
-    # Append cryptographic hash of message / file to packet.
-    string  = string + keccak_256(string)
+    encoded     = base64_encode(ct_with_tag)
+    checksum    = crc32(encoded + '|' + str(key_id))
 
-    # Split packet to list the items of which are 3 char shorter than max length:
-    # This leaves room for 2 char header and prevents dummy blocks when padding.
-    packetA = [string[i:i + (PkgSize - 3)] for i in range(0, len(string), (PkgSize - 3))]
+    write_key_id('local', key_id + 1)
+    command_output(encoded, key_id, checksum)
 
-
-    if preprocessMsg:                        # All packets to recipients have header {s,l,a,e}{m,f}.
-        for i in xrange(len(packetA)):
-            packetA[i] = 'am' + packetA[i]   # 'am' stands for appended message packets.
-        packetA[-1] = 'em' + packetA[-1][2:] # 'em' stands for end message packets.
-        packetA[0]  = 'lm' + packetA[0][2:]  # 'lm' stands for start of long message packets.
-
-    if preprocessFile:
-        for i in xrange(len(packetA)):
-            packetA[i] = 'af' + packetA[i]   # 'af' stands for appended file packets.
-        packetA[-1] = 'ef' + packetA[-1][2:] # 'ef' stands for end file packets.
-        packetA[0]  = 'lf' + packetA[0][2:]  # 'lf' stands for start of long file packets.
+    return None
 
 
-    if debugging:
-        print '\nM(long_msg_preprocess): Processed long message to following packets:'
-        for item in packetA:
-            print '"' + item + '"'
+def command_output(ct, keyid, crc):
+    """
+    Output command packet to RS232 interface.
 
-    return packetA
+    :param ct:    Ciphertext and MAC of mcd in base64 format.
+    :param keyid: KeyID appended to packet.
+    :param crc:   CRC32 detects transmission errors over RS232 data diode.
+    :return:      None.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(ct, str) and isinstance(keyid, (int, long)) and isinstance(crc, str)):
+        exit_with_msg('CRITICAL ERROR! M(command_output): Wrong input type.')
+
+    cmd_packet = '<ctrl>%s|%s~%s\n' % (ct, str(keyid), crc)
+
+    if local_testing:
+        with open('TxOutput', 'w+') as f:
+            f.write(cmd_packet)
+        if debugging:
+            print '\nM(command_output): Cmd to NH:\n%s\n' % cmd_packet
+
+    else:
+        port.write(cmd_packet)
+        if debugging:
+            print '\nM(command_output): Cmd to NH:\n%s\n' % cmd_packet
+
+    return None
 
 
+def long_msg_transmit(plaintext, xmpp):
+    """
+    Send long messages via RS232 interface.
 
-def long_msg_process(userInput, xmpp):
+    :param plaintext: Long plaintext message.
+    :param xmpp:      The contact's XMPP-address (i.e. alice@jabber.org).
+    :return:          None.
+    """
 
-    packetList = long_msg_preprocess(userInput)
+    # Verify input parameter types.
+    if not (isinstance(plaintext, str) and isinstance(xmpp, str)):
+        exit_with_msg('CRITICAL ERROR! M(long_msg_transmit): Wrong input type.')
 
-    if userInput.startswith('f'):
-        print '\nTransferring file over ' + str(len(packetList)) + ' packets. ^C cancels'
-    if userInput.startswith('m'):
-        print '\nTransferring message over ' + str(len(packetList)) + ' packets. ^C cancels'
+    packet_list = long_msg_preprocess(plaintext)
 
-    for packet in packetList:
+    if plaintext.startswith('f'):
+        print '\nTransferring file over %s packets. ^C cancels.'    % str(len(packet_list))
+    if plaintext.startswith('m'):
+        print '\nTransferring message over %s packets. ^C cancels.' % str(len(packet_list))
 
+    for packet in packet_list:
         try:
-            keyID     = get_keyID(xmpp)
+            key_id      = get_key_id(xmpp)
 
-            paddedMsg = padding(packet)
-            ctWithTag = encrypt(xmpp, paddedMsg)
+            padded_msg  = padding(packet)
+            ct_with_tag = quad_encrypt(xmpp, padded_msg)
 
-            encoded   = base64_encode(ctWithTag)
-            checksum  = crc32(encoded + '|' + str(keyID))
+            encoded     = base64_encode(ct_with_tag)
+            checksum    = crc32(encoded + '|' + str(key_id))
 
-            write_keyID(xmpp, keyID + 1)
-            output_message(xmpp, encoded, keyID, checksum)
+            write_key_id(xmpp, key_id + 1)
+            message_output(xmpp, encoded, key_id, checksum)
 
-            if randomSleep:
-                sleepTime = random.uniform(0, maxSleepTime)
-                print 'Sleeping ' + str(sleepTime) + ' seconds to obfuscate long message.'
-                time.sleep(sleepTime)
+            # When transmitting long packets, send a noise
+            # command between packets with ~1/2 probability.
+            if c_transmission:
+                ct_sleep()
+                if ord(os.urandom(1)) % 2 == 1:
+                    command_transmit('TFCNOISECOMMAND')
+                    ct_sleep()
 
-            # Minimum sleep time ensures XMPP server is not flooded.
-            time.sleep(lMsgSleep)
+            else:
+                if random_sleep:
+                    sleep_time = random.uniform(0, max_sleep_time)
+                    print 'Sleeping %s seconds to obfuscate long message.' % str(sleep_time)
+                    time.sleep(sleep_time)
+
+                # Minimum sleep time ensures XMPP server is not flooded.
+                time.sleep(l_msg_sleep)
 
         except KeyboardInterrupt:
 
-            # If user interrupts packet transmission, send encrypted notification.
-            os.system('clear')
-            if userInput.startswith('f'):
+            # If user interrupts packet transmission,
+            # send encrypted notification to contact.
+            if plaintext.startswith('f'):
                 print '\nFile transmission interrupted by user.\n'
-                cancelMsg = 'cf'
+                cancel_msg = 'cf'
             else:
                 print '\nMessage transmission interrupted by user.\n'
-                cancelMsg = 'cm'
+                cancel_msg = 'cm'
 
-            keyID     = get_keyID(xmpp)
+            key_id      = get_key_id(xmpp)
 
-            paddedMsg = padding(cancelMsg)
-            ctWithTag = encrypt(xmpp, paddedMsg)
+            padded_msg  = padding(cancel_msg)
+            ct_with_tag = quad_encrypt(xmpp, padded_msg)
 
-            encoded   = base64_encode(ctWithTag)
-            checksum  = crc32(encoded + '|' + str(keyID))
+            encoded     = base64_encode(ct_with_tag)
+            checksum    = crc32(encoded + '|' + str(key_id))
 
-            write_keyID(xmpp, keyID + 1)
-            output_message(xmpp, encoded, keyID, checksum)
+            write_key_id(xmpp, key_id + 1)
+            message_output(xmpp, encoded, key_id, checksum)
+
+            # When transmitting the notification, also send a noise
+            # command after the packet packet with ~1/2 probability.
+            if c_transmission:
+                if ord(os.urandom(1)) % 2 == 1:
+                    command_transmit('TFCNOISECOMMAND')
+                    ct_sleep()
 
             return None
 
-    if userInput.startswith('f'):
+    if plaintext.startswith('f'):
         print '\nFile transmission complete.\n'
-    if userInput.startswith('m'):
+    if plaintext.startswith('m'):
         print '\nMessage transmission complete.\n'
 
+    return None
 
 
-def short_msg_process(plaintext, xmpp):
+def short_msg_transmit(plaintext, xmpp):
+    """
+    Send short messages via RS232 interface.
 
-    keyID     = get_keyID(xmpp)
-                                         # All packets to recipients have header {s,l,a,e}{m,f}.
-    paddedMsg = padding('s' + plaintext) # 's' stands for single packet messages.
-    ctWithTag = encrypt(xmpp, paddedMsg)
+    :param plaintext: Short plaintext message.
+    :param xmpp:      The contact's XMPP-address (i.e. alice@jabber.org).
+    :return:          None.
+    """
 
-    encoded  = base64_encode(ctWithTag)
-    checksum = crc32(encoded + '|' + str(keyID))
-
-    write_keyID(xmpp, keyID + 1)
-    output_message(xmpp, encoded, keyID, checksum)
+    # Verify input parameter types.
+    if not (isinstance(plaintext, str) and isinstance(xmpp, str)):
+        exit_with_msg('CRITICAL ERROR! M(short_msg_transmit): Wrong input type.')
 
 
 
-def cmd_msg_process(command):
+    key_id      = get_key_id(xmpp)
 
-    keyID     = get_keyID('tx.local')
+    padded_msg  = padding('s' + plaintext)  # 's' = single packet msg.
 
-    paddedCmd = padding(command)
-    ctWithTag = encrypt('tx.local', paddedCmd)
+    ct_with_tag = quad_encrypt(xmpp, padded_msg)
 
-    encoded   = base64_encode(ctWithTag)
-    checksum  = crc32(encoded + '|' + str(keyID))
+    encoded     = base64_encode(ct_with_tag)
+    checksum    = crc32(encoded + '|' + str(key_id))
 
-    write_keyID('tx.local', keyID + 1)
-    output_command(encoded, keyID, checksum)
+    write_key_id(xmpp, key_id + 1)
+    message_output(xmpp, encoded, key_id, checksum)
 
+    return None
+
+
+def message_output(xmpp, ct, keyid, crc):
+    """
+    Output message to RS232 interface.
+
+    :param xmpp:  The contact's XMPP-address (i.e. alice@jabber.org).
+    :param ct:    Ciphertext and MAC of msg in base64 format.
+    :param keyid: KeyID appended to packet.
+    :param crc:   CRC32 detects transmission errors over RS232 data diode.
+    :return:      None.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(xmpp, str) and isinstance(ct, str) and isinstance(keyid, (int, long)) and isinstance(crc, str)):
+        exit_with_msg('CRITICAL ERROR! M(message_output): Wrong input type.')
+
+    msg_packet = '<mesg>%s~?TFC_%s|%s~%s\n' % (xmpp, ct, str(keyid), crc)
+
+    if local_testing:
+        with open('TxOutput', 'w+') as f:
+            f.write(msg_packet)
+        if debugging:
+            print '\nM(message_output): Msg to NH:\n' + msg_packet
+
+    else:
+        port.write(msg_packet)
+        if debugging:
+            print '\nM(message_output): Msg to NH:\n' + msg_packet
+
+    return None
 
 
 def quit_process(output=False):
+    """
+    Broadcast quit command to NH and RxM.
+
+    :param output: Output notification about exiting.
+    :return:       None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(output, bool):
+        exit_with_msg('CRITICAL ERROR! M(quit_process): Wrong input type.')
+
     os.system('clear')
 
     if output:
         print '\nExiting TFC\n'
 
-    if localTesting:
-        with open('TxOutput', 'w+') as file:
-            file.write('EXITTFC\n')
+    if local_testing:
+        with open('TxOutput', 'w+') as f:
+            f.write('EXITTFC\n')
     else:
         port.write('EXITTFC\n')
     exit()
 
 
+def send_msg_or_file(payload):
+    """
+    Send message or file to one ore contacts.
 
-def output_command(base64msg, line, checksum):
-    if localTesting:
-        with open('TxOutput', 'w+') as file:
-            file.write(                            '<ctrl>'                            + base64msg + '|' + str(line) + '~' + checksum + '\n')
-        if debugging:
-            print '\nM(output_command): Cmd to NH:\n<ctrl>'                            + base64msg + '|' + str(line) + '~' + checksum + '\n\n'
+    :param payload: Message / file content to be sent.
+    :return:        None.
+    """
 
-    else:
-        port.write(                                '<ctrl>'                            + base64msg + '|' + str(line) + '~' + checksum + '\n')
-        if debugging:
-            print '\nM(output_command): Cmd to NH:\n<ctrl>'                            + base64msg + '|' + str(line) + '~' + checksum + '\n\n'
+    # Verify input parameter type.
+    if not isinstance(payload, str):
+        exit_with_msg('CRITICAL ERROR! M(send_msg_or_file): Wrong input type.')
 
+    if group:
 
+        group_member_list = get_group_members(group)
 
-def output_message(xmpp, base64msg, line, checksum):
-    if localTesting:
-        with open('TxOutput', 'w+') as file:
-            file.write(                            '<mesg>' + xmpp[3:] + '~' + '?TFC_' + base64msg + '|' + str(line) + '~' + checksum + '\n')
-        if debugging:
-            print '\nM(output_message): Msg to NH:\n<mesg>' + xmpp     + '~' + '?TFC_' + base64msg + '|' + str(line) + '~' + checksum + '\n\n'
+        if not group_member_list:
+            if payload.startswith('f'):
+                print '\nCurrently selected group is empty. No file was sent.\n'
+            else:
+                print '\nCurrently selected group is empty. No message was sent.\n'
+            return None
 
-    else:
-        port.write(                                '<mesg>' + xmpp[3:] + '~' + '?TFC_' + base64msg + '|' + str(line) + '~' + checksum + '\n')
-        if debugging:
-            print '\nM(output_message): Msg to NH:\n<mesg>' + xmpp     + '~' + '?TFC_' + base64msg + '|' + str(line) + '~' + checksum + '\n\n'
+        # Multicasted messages.
+        for member in group_member_list:
+            print '           > ' + member
 
+            if len(payload) > pkg_size:
+                long_msg_transmit(payload, member)
 
-
-######################################################################
-#                       COMMANDS AND FUNCTIONS                       #
-######################################################################
-
-def tab_complete(text, state):
-    options = [x for x in autotabs if x.startswith(text)]
-    try:
-        return options[state]
-    except IndexError:
-        return None
-
-
-
-def print_help():
-    ttyW = get_terminal_width()
-
-    if ttyW < 72:
-        le = '\n' + ttyW * '-'
-        print                                                                   le
-        print '/about\nDisplay information about TFC'                         + le
-        if not emergencyExit:
-            print '/clear & \'  \'\nClear screens'                            + le
-        if emergencyExit:
-            print '\'  \'\nEmergency exit'                                    + le
-            print '/clear\nClear screens'                                     + le
-        print '/help\nDisplay this list of commands'                          + le
-        print '/logging <on/off>\nEnable/disable logging'                     + le
-        print '/msg <ID/xmpp/group>\nChange recipient'                        + le
-        print '/names\nDisplays available contacts'                           + le
-        print '/paste\nEnable paste-mode'                                     + le
-        print '/file <filename>\nSend file to recipient'                      + le
-        print '/nick <nick>\nChange contact nickname'                         + le
-        print '/quit & /exit\nExit TFC'                                       + le
-        print '/store <b64 file> <output file>\nDecodes received file'        + le
-        print '/group\nList members of selected group'                        + le
-        print '/groups\nList currently available groups and their members'    + le
-        print '/group <groupname>\nSelect group'                              + le
-        print '/group create <groupname> <xmpp1> <xmpp2>\nCreate new group'   + le
-        print '/group add <groupname> <xmpp1> <xmpp2>\nAdd xmpp to group'     + le
-        print '/group rm <groupname> <xmpp1> <xmpp2>\nRemove xmpp from group' + le
-        print 'Shift + PgUp/PgDn\nScroll terminal up/dn'                      + le
-        print '/store <tmp f.name> <output f.name>\nSave received tmp file'   + le
-        print '/newkf tx <contactXMPP> 1.kf\nChange keyfile for sending'      + le
-        print '/newkf rx <contactXMPP> 1.kf\nChange keyfile for receiving'    + le
+            else:
+                short_msg_transmit(payload, member)
+                time.sleep(0.1)
         print ''
 
+    # Standard messages.
     else:
-        print     'List of commands:'
-        print     ' /about'                                      + 16 * ' ' + 'Show information about software'
-        if emergencyExit:
-            print ' /clear'                                      + 16 * ' ' + 'Clear screens'
-            print ' \'  \' (2x spacebar) '                                  + 'Panic exit'
+        if len(payload) > pkg_size:
+            long_msg_transmit(payload, xmpp)
+
         else:
-            print ' /clear & \'  \''                             +  9 * ' ' + 'Clear screens'
-        print     ' /file <file name>'                           +  5 * ' ' + 'Send file to recipient'
-        print     ' /help'                                       + 17 * ' ' + 'Display this list of commands'
-        print     ' /logging <on/off>'                           +  5 * ' ' + 'Enable/disable logging on Rx.py'
-        print     ' /msg <ID/xmpp/group>'                        +  2 * ' ' + 'Change recipient'
-        print     ' /names'                                      + 16 * ' ' + 'Displays available contacts'
-        print     ' /nick <nick>'                                + 10 * ' ' + 'Change contact\'s nickname on Tx.py & Rx.py'
-        print     ' /paste'                                      + 16 * ' ' + 'Enable paste-mode'
-        print     ' /quit & /exit'                               +  9 * ' ' + 'Exits TFC'
-        print     ' Shift + PgUp/PgDn'                           +  5 * ' ' + 'Scroll terminal up/down'
+            short_msg_transmit(payload, xmpp)
 
-        print ttyW * '-'
-        print     ' /groups'                                     + 15 * ' ' + 'List currently available groups and their members'
-        print     ' /group'                                      + 16 * ' ' + 'List group members'
-        print     ' /group <group name>'                         +  3 * ' ' + 'Select group\n'
-
-        print     ' /group create <group name> <xmpp 1> <xmpp 2> .. <xmpp n>\n' \
-                    ' Create new group named <group name>, add xmpp-addresses.\n'
-
-        print     ' /group add <group name> <xmpp 1> <xmpp 2> .. <xmpp n>\n' \
-                    ' Add xmpp-addresses to group <group name>\n'
-
-        print     ' /group rm <group name> <xmpp 1> <xmpp 2> .. <xmpp n>\n' \
-                  ' Remove xmpp-addresses from group <group name>.'
-
-        print ttyW * '-' + '\n'
-
-        print     ' /store <tmp file name> <output file name>\n '   +  41 * '-' + '\n'\
-                  ' Decodes automatically saved received file <temp file name>\n'    \
-                  ' and stores it as <output file name>. Shreds <temp file name>.\n\n'
-
-
-
-def print_list_of_contacts():
-    ttyW        = get_terminal_width()
-    columnList  = ['XMPP-address', 'ID', 'Nick']
-
-    gap1        = len(max(keyFileNames, key=len)) - 2 - len(columnList[0])
-    header      = columnList[0] + gap1 * ' ' + columnList[1] + '  ' + columnList[2]
-
-    print header + '\n' + ttyW * '-'
-
-    for xmpp in keyFileNames:
-        ID   = keyFileNames.index(xmpp)
-        nick = get_nick(xmpp[:-2])
-        xmpp = xmpp[3:][:-2]
-        if nick != 'tx.local':
-            gap2 = int(header.index(columnList[1][0])) - len(xmpp)
-            gap3 = int(header.index(columnList[2][0])) - len(xmpp) - gap2 - len(str(ID))
-            print xmpp + gap2 * ' ' + str(ID) + gap3 * ' ' + nick
-        idSelDist = int(header.index(columnList[1][0]))
-
-    return idSelDist
-
-
-
-def select_contact(idSelDist='', contactNo='', menu=True):
-
-    contactSelected = False
-    while not contactSelected:
-        try:
-            # If no parameter about contact selection is passed to function, ask for input
-            if contactNo == '':
-                selection = raw_input('\nSelect contact:' + (idSelDist - 15) * ' ')
-
-                intSelection = int(selection)
-            else:
-                intSelection = int(contactNo)
-
-
-        # Error handling if selection was not a number.
-        except ValueError:
-            if menu:
-                os.system('clear')
-                print 'TFC ' + version + ' || Tx.py' + '\n\nError: Invalid contact selection \'' + selection + '\'\n'
-                print_list_of_contacts()
-                continue
-            else:
-                raise ValueError, 'Invalid number'
-
-
-        # Clean exit.
-        except KeyboardInterrupt:
-            exit_with_msg('Exiting TFC.', False)
-
-
-        # Check that integer is within allowed bounds.
-        if (intSelection < 0) or (intSelection > get_contact_quantity()):
-            if menu:
-                os.system('clear')
-                print 'TFC ' + version + ' || Tx.py' + '\n\nError: Invalid contact selection \'' + selection + '\'\n'
-                print_list_of_contacts()
-                continue
-            else:
-                raise ValueError, 'Invalid number'
-
-
-        # Check that selction number was valid.
-        try:
-            keyFile = keyFileNames[intSelection]
-        except IndexError:
-            if menu:
-                os.system('clear')
-                print 'TFC ' + version + ' || Tx.py' + '\n\nError: Invalid contact selection \'' + selection + '\'\n'
-                print_list_of_contacts()
-                continue
-            else:
-                print '\nError: Invalid contact selection\n'
-
-        xmpp = keyFile[:-2]
-        nick = get_nick(xmpp)
-
-
-        # Check that user has not selected local contact.
-        if xmpp == 'tx.local':
-            if menu:
-                contactNo = ''
-                os.system('clear')
-                print 'TFC ' + version + ' || Tx.py' + '\n\nError: Invalid contact selection \'' + selection + '\'\n'
-                print_list_of_contacts()
-                continue
-            else:
-                raise ValueError, 'Invalid number'
-
-        contactSelected = True
-
-    return xmpp, nick
-
-
-
-def exit_with_msg(message, error=True):
-    os.system('clear')
-    if error:
-        print '\n' + message + ' Exiting.\n'
-    else:
-        print '\n' + message + '\n'
-    exit()
-
+    return None
 
 
 ######################################################################
 #                          GROUP MANAGEMENT                          #
 ######################################################################
 
-def group_create(groupName, newMembers=[]):
+def get_group_members(group_name):
+    """
+    Get members of group.
 
-    if os.path.isfile('g.' + groupName + '.tfc'):
-        if not (raw_input('Group \'' + groupName + '\' already exists. Type YES to overwrite: ') == 'YES'):
-            return False
-        os.system('clear')
+    :param group_name: Name of group to list members of.
+    :return:           List of group memgbers.
+    """
 
-    with open('g.' + groupName + '.tfc', 'w+') as file:
-        if newMembers:
-            for user in newMembers:
-                file.write(user + '\n')
-            sort_group(groupName)
-        else:
+    # Verify input parameter type.
+    if not (isinstance(group_name, str)):
+        exit_with_msg('CRITICAL ERROR! M(get_group_members): Wrong input type.')
+
+    try:
+        g_c_list = []
+
+        with open('g.' + group_name + '.tfc') as f:
+            for l in f.readlines():
+                g_c_list.append(l.strip('\n'))
+
+        return g_c_list
+
+    except IOError:
+        exit_with_msg('ERROR! M(get_group_members): Group file g.%s.tfc could not be loaded.' % group_name)
+
+
+def get_list_of_groups():
+    """
+    Get list of existing groups.
+
+    :return: List og groups.
+    """
+
+    g_file_list  = []
+    g_file_list += [f[2:][:-4] for f in os.listdir('.') if (f.startswith('g.') and f.endswith('.tfc'))]
+
+    return g_file_list
+
+
+def group_create(parameters):
+    """
+    Create new group.
+
+    :param   parameters: Command string to be parsed.
+    :return: True if new group was created.
+    """
+
+    # Verify input parameter type.
+    if not (isinstance(parameters, str)):
+        exit_with_msg('CRITICAL ERROR! M(group_create): Wrong input type.')
+
+    try:
+        parameters = ' '.join(parameters.split())
+        parlist    = parameters.split(' ')
+        groupname  = parlist[2]
+
+    except IndexError:
+        print '\nError: No group name specified.\n'
+        return None
+
+    # Overwrite if group exists or abort creation.
+    if os.path.isfile('g.' + groupname + '.tfc'):
+        if yes('\nGroup already exists. Overwrite?'):
             pass
-
-    return True
-
-
-
-def group_add_member(groupName, addList):
-    try:
-        gFile    = []
-        existing = []
-        added    = []
-        unknown  = []
-
-        with open('g.' + groupName + '.tfc', 'a+') as file:
-            groupFile = file.readlines()
-
-            for contact in groupFile:
-                gFile.append(contact.strip('\n'))
-
-            for member in addList:
-                member   = member.strip('\n').strip(' ')
-                memberKf = 'tx.' + member + '.e'
-
-                if member in gFile:
-                    existing.append(member)
-
-                else:
-                    if memberKf in keyFileNames:
-                        file.write(member + '\n')
-                        added.append(member)
-
-                    else:
-                        unknown.append(member)
-
-            os.system('clear')
-
-            if added:
-                print 'Members added to group \'' + groupName + '\':'
-                for member in added:
-                    print '   ' + member
-                print '\n'
-
-                sort_group(groupName)
-
-            if unknown:
-                print 'Unknown contacts not added to group \'' + groupName + '\':'
-                for member in unknown:
-                    print '   ' + member
-                print '\n'
-
-            if existing:
-                print 'Already existing users in group \'' + groupName + '\':'
-                for member in existing:
-                    print '   ' + member
-                print '\n'
-
-    except IOError:
-        exit_with_msg('ERROR! Group file g.' + groupName + '.tfc could not be loaded.')
-
-
-
-def group_rm_member(groupName, rmList):
-    try:
-        memberList = []
-        removed    = []
-        unknown    = []
-
-        with open('g.' + groupName + '.tfc', 'r') as file:
-            groupFile = file.readlines()
-
-        for member in groupFile:
-            member = member.strip('\n')
-            memberList.append(member)
-
-        with open('g.' + groupName + '.tfc', 'w') as file:
-            for member in memberList:
-                if member in rmList:
-                    removed.append(member)
-                else:
-                    file.write(member + '\n')
-
-        for member in rmList:
-            if member not in memberList:
-                unknown.append(member)
-
-        os.system('clear')
-
-        if removed:
-            print 'Members removed from group \'' + groupName + '\':'
-            for member in removed:
-                print '   ' + member
         else:
-            print 'Nothing removed from group \'' + groupName + '\':'
+            print '\nGroup creation aborted.\n'
+            return None
 
-        if unknown:
-            print '\n\nUnknown contacts not removed from group \'' + groupName + '\':'
-            for member in unknown:
-                print '   ' + member
+    # Check that group name is not reserved.
+    if groupname == '':
+        print "\nError: Group name can't be empty.\n"
+        return None
+    if groupname in ['create', 'add', 'rm']:
+        print "\nError: Group name can't be a command.\n"
+        return None
+    if ' ' in groupname:
+        print "\nError: Group name can't have spaces.\n"
+        return None
+
+    for f in get_keyfile_list():
+        if groupname in get_nick(f[3:][:-2]):
+            print "\nError: Group name can't be nick of contact.\n"
+            return None
+        if groupname in f[3:][:-2]:
+            print "\nError: Group name can't be XMPP-address.\n"
+            return None
+        if groupname in f[:-2]:
+            print "\nError: Group name can't be keyfile.\n"
+            return None
+
+    # Initialize groups.
+    accepted  = []
+    rejected  = []
+
+    c_list    = parlist[3:]
+    existing  = get_list_of_xmpp_addr()
+
+    for c in c_list:
+
+        if c in existing and c != 'local':
+            accepted.append(c)
+        else:
+            rejected.append(c)
+
+    with open('g.' + groupname + '.tfc', 'w+') as f:
+        if accepted:
+            for c in accepted:
+                f.write(c + '\n')
+            print "\nCreated group '%s' with following members:" % groupname
+            for c in accepted:
+                print '    ' + c
+            print ''
+
+        else:
+            f.write('')
+            print "\nCreated an empty group '%s'\n" % groupname
+
+    # Alphabetize contacts.
+    sort_group(groupname)
+
+    if rejected:
+        print "\nFollowing unknown members are not in contacts:"
+        for c in rejected:
+            print '    ' + c
+        print ''
+
+    return None
+
+
+def group_add_member(parameters):
+    """
+    Add members to specified group. Create new
+    group is specified group doesn't exist.
+
+    :param parameters: Group name and member list yet to be separated.
+    :return:           None.
+    """
+
+    # Verify input parameter type.
+    if not (isinstance(parameters, str)):
+        exit_with_msg('CRITICAL ERROR! M(group_add_member): Wrong input type.')
+
+    parameters = ' '.join(parameters.split())
+    param_list = parameters.split(' ')
+    group_name = param_list[2]
+    c_eval_lst = param_list[3:]
+
+    c_add_list = []
+    c_unknown  = []
+
+    if not os.path.isfile('g.' + group_name + '.tfc'):
+        if yes("\nGroup '%s' was not found. Create new group?" % group_name):
+            group_create(parameters)
+            return None
+        else:
+            print '\nGroup creation aborted.\n'
+            return None
+
+    contacts = get_list_of_xmpp_addr()
+
+    for c in c_eval_lst:
+        if c in contacts and c != 'local':
+            c_add_list.append(c)
+        else:
+            c_unknown.append(c)
+
+    already_in_g_f = []
+    c_added        = []
+
+    try:
+        with open('g.' + group_name + '.tfc', 'a+') as f:
+            for c in c_add_list:
+                if c not in get_group_members(group_name):
+                    f.write(c + '\n')
+                    c_added.append(c)
+                else:
+                    already_in_g_f.append(c)
 
     except IOError:
-        exit_with_msg('ERROR! Group file g.' + groupName + '.tfc could not be loaded.')
+        exit_with_msg('ERROR! M(group_add_member): Group file g.%s.tfc could not be loaded.' % group_name)
+
+    # Alphabetize contacts.
+    sort_group(group_name)
+
+    if c_added:
+        print '\nAdded following contacts to %s:' % group_name
+        for c in c_added:
+            print '    ' + c
+        print ''
+
+    if already_in_g_f:
+        print "\nFollowing contacts were already in group '%s':" % group_name
+        for c in already_in_g_f:
+            print '    ' + c
+        print ''
+
+    if c_unknown:
+        print "\nFollowing unknown members are not in contacts:"
+        for c in c_unknown:
+            print '    ' + c
+        print '\n'
+
+    return None
 
 
+def group_rm_member(parameters):
+    """
+    Remove specified members from group. If no members
+    are specified, overwrite and delete group file.
 
-def sort_group(groupName):
+    :param parameters: Group name and list of contacts to remove.
+    :return:           None.
+    """
+
+    # Verify input parameter type.
+    if not (isinstance(parameters, str)):
+        exit_with_msg('CRITICAL ERROR! M(group_rm_member): Wrong input type.')
+
+    parameters = ' '.join(parameters.split())
+    param_list = parameters.split(' ')
+    group_name = param_list[2]
+    c_eval_lst = param_list[3:]
+
+    if not os.path.isfile('g.' + group_name + '.tfc'):
+        print '\nError: Group does not exist.\n'
+        return None
+
+    if not c_eval_lst:
+        if yes("\nNo contacts specified! Remove entire group '%s'?" % group_name):
+            while os.path.isfile('g.' + group_name + '.tfc'):
+                subprocess.Popen('shred -n 3 -z -u g.' + group_name + '.tfc', shell=True).wait()
+            print '\nGroup file %s removed.\n' % group_name
+            return None
+        else:
+            print '\nGroup removal aborted.\n'
+            return None
+
+    c_rm_list = []
+    c_unknown = []
+    c_removed = []
+    c_not_i_g = []
+    c_in_g_f  = get_group_members(group_name)
+    contacts  = get_list_of_xmpp_addr()
+
+    for c in c_eval_lst:
+        if c in contacts and c != 'local':
+            c_rm_list.append(c)
+        else:
+            c_unknown.append(c)
+
     try:
-        with open('g.' + groupName + '.tfc', 'r') as file:
-            members = file.readlines()
+        with open('g.' + group_name + '.tfc', 'w') as f:
+            for c in c_rm_list:
+                if c not in c_in_g_f:
+                    c_not_i_g.append(c)
+
+            for c in c_in_g_f:
+                if c in c_rm_list:
+                    c_removed.append(c)
+                else:
+                    f.write(c + '\n')
+
+    except IOError:
+        exit_with_msg('ERROR! M(group_rm_member): g.%s.tfc could not be opened' % group_name)
+        return None
+
+    if c_removed:
+        print "\nFollowing members were removed from group '%s':" % group_name
+        for c in c_removed:
+            print '    ' + c
+        print ''
+
+    if c_not_i_g:
+        print "\nFollowing members were not in group '%s' to begin with:" % group_name
+        for c in c_not_i_g:
+            print '    ' + c
+        print ''
+
+    if c_unknown:
+        print "\nFollowing unknown members are not in contacts:"
+        for c in c_unknown:
+            print '    ' + c
+        print '\n'
+
+    return None
+
+
+def load_file_data(parameters):
+    """
+    Encode file to Base64 and load it as payload.
+
+    :param parameters: Target file yet to be separated from command.
+    :return:           None.
+
+    By adding the TFCPROCESSED**** header, input_process can take
+    care of preprocessing and move message to queue in it's own pace.
+    This way constant time process does not get interrupted:
+    long_msg_transmit() takes care of adding 1:1 ratio of TFCNOISECOMMANDs
+    and ct_sleep() between packets so long transmission doesn't reveal
+    communication taking place.
+    """
+
+    # Verify input parameter type.
+    if not (isinstance(parameters, str)):
+        exit_with_msg('CRITICAL ERROR! M(group_add_member): Wrong input type.')
+
+    param_list = parameters.split(' ')
+    file_name  = param_list[1]
+
+    if yes('\nSend file %s to %s?' % (file_name, nick)):
+        subprocess.Popen('base64 ' + file_name + ' > tfc_tmp_file', shell=True).wait()
+
+        file_content = ''
+        with open('tfc_tmp_file') as f:
+            for line in f.readlines():
+                line = line.strip('\n')
+                file_content += line.strip()
+
+        if not file_content:
+            os.system('clear')
+            print "\nError: target file '%s'  was empty. Transmission aborted.\n" % file_name
+            return 'ABORT'
+
+    else:
+        print '\nFile sending aborted.\n'
+        if not c_transmission:
+            time.sleep(0.5)
+        return 'ABORT'
+
+    subprocess.Popen('shred -n ' + str(shred_iterations) + ' -z -u tfc_tmp_file', shell=True).wait()
+
+    return 'TFCPROCESSEDFILE' + 'f' + file_content
+
+
+def print_group_list():
+    """
+    Print list of groups and if print_group_contacts is True, their members.
+
+    :return: None.
+    """
+    # Get list of availabel group files.
+    g_file_list  = get_list_of_groups()
+
+    if g_file_list:
+        if print_g_contacts: print '\nAvailable groups and their members:'
+        if not print_g_contacts: print '\nAvailable groups:'
+
+        for g in g_file_list:
+            print '    ' + g
+            if print_g_contacts:
+                print_group_members(g, True)
+        print ''
+    else:
+        print '\nThere are currently no groups.\n'
+
+    return None
+
+
+def print_group_members(group_name, short=False):
+    """
+    Print list of existing groups (and their members).
+
+    :param group_name: Target group.
+    :param short:      When printing members of groups as part
+                       of /groups command, leave out headers.
+    :return:           None.
+    """
+
+    # Verify input parameter types.
+    if not (isinstance(group_name, str) and isinstance(short, bool)):
+        exit_with_msg('CRITICAL ERROR! M(print_group_members): Wrong input type.')
+
+    if not group and group_name == '':
+        print '\nNo group is selected.\n'
+        return None
+
+    if group and group_name == '':
+        group_name = group
+
+    try:
+        g_members  = []
+
+        with open('g.' + group_name + '.tfc') as f:
+            for l in f.readlines():
+                g_members.append(l.strip('\n'))
+
+        if g_members:
+
+            # Indent and leave out description if printed as part of all group files.
+            if short:
+                for m in g_members:
+                    print '        ' + m
+                print ''
+
+            else:
+                print '\nMembers in group %s' % group_name
+                for m in g_members:
+                    print '    ' + m
+                print ''
+
+        else:
+            if short:
+                print '        Group is empty.'
+            else:
+                print '\nGroup is empty.\n'
+
+    except IOError:
+        if short:
+            print '    Group file %s does not exist.'   % group_name
+        else:
+            print "\nGroup file '%s' does not exist.\n" % group_name
+
+    return None
+
+
+def sort_group(group_name):
+    """
+    Alphabetize members of specified group.
+
+    :param group_name: Name of groups to sort.
+    :return:           None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(group_name, str):
+        exit_with_msg('CRITICAL ERROR! M(sort_group): Wrong input type.')
+
+    try:
+        with open('g.' + group_name + '.tfc') as f:
+            members = f.readlines()
             members.sort()
 
-        with open('g.' + groupName + '.tfc', 'w') as file:
+        with open('g.' + group_name + '.tfc', 'w') as f:
             for member in members:
-                file.write(member)
+                f.write(member)
 
     except IOError:
-        exit_with_msg('ERROR! Group file g.' + selectedGroup + '.tfc could not be loaded.')
+        exit_with_msg('ERROR! M(sort_group): Group file g.%s.tfc could not be loaded.' % group_name)
 
 
+######################################################################
+#                                MISC                                #
+######################################################################
 
-def get_group_list(output):
-    gFileNames = []
-    for file in os.listdir('.'):
-        if file.startswith('g.') and file.endswith('.tfc'):
-            gFileNames.append(file[2:][:-4])
+def ch_debug(status):
+    """
+    Change global boolean debugging that determines
+    if debuggin mode prints are enabled.
 
-    if not gFileNames and output:
-        print '\nThere are currently no groups.'
+    :param status: Boolean value of setting.
+    :return:       None.
+    """
 
-    return gFileNames
+    # Verify input parameter type.
+    if not isinstance(status, bool):
+        exit_with_msg('CRITICAL ERROR! M(ch_debug): Wrong input type.')
+
+    global debugging
+
+    if status:
+        print '\nDebugging has been enabled.\n'
+        debugging = True
+    else:
+        print '\nDebugging has been disabled.\n'
+        debugging = False
+
+    return None
 
 
+def get_terminal_width():
+    """
+    Get width of terminal Tx.py is running in.
 
-def get_group_members(groupName, output=True):
+    :return: The integer value of terminal width.
+    """
+
+    return int(subprocess.check_output(['stty', 'size']).split()[1])
+
+
+def print_about():
+    """
+    Print information about TFC project.
+
+    :return: None.
+    """
+
+    os.system('clear')
+    print ' Tinfoil Chat CEV %s\n' % version
+    print ' Homepage:\n'   + '  https://github.com/maqp/tfc-cev/\n'
+    print ' Whitepaper:\n' + '  https://cs.helsinki.fi/u/oottela/tfc.pdf\n'
+    print ' Manual:\n'     + '  https://cs.helsinki.fi/u/oottela/tfc-manual.pdf\n\n'
+
+    return None
+
+
+def print_help():
+    """
+    Print the list of commands.
+
+    :return: None.
+    """
+
+    os.system('clear')
+
+    width = get_terminal_width()
+
+    if width < 66:
+        le = '\n' + width * '-'
+        print le
+        print '/about\nDisplay information about TFC'                           + le
+        print "/clear & '  '\nClear screens"                                    + le
+        print '/help\nDisplay this list of commands'                            + le
+        print '/logging <on/off>\nEnable/disable logging'                       + le
+        print '/msg <ID/xmpp/group>\nChange recipient'                          + le
+        print '/names\nDisplays available contacts'                             + le
+        print '/paste\nEnable paste-mode'                                       + le
+        print '/file <filename>\nSend file to recipient'                        + le
+        print '/nick <nick>\nChange contact nickname'                           + le
+        print '/quit & /exit\nExit TFC'                                         + le
+        print '/store <b64 file> <output file>\nDecodes received file'          + le
+        print '/group\nList members of selected group'                          + le
+        print '/groups\nList currently available groups and their members'      + le
+        print '/group <groupname>\nList members of <groupname>'                 + le
+        print '/group create <groupname> <xmpp1> <xmpp2>\nCreate new group'     + le
+        print '/group add <groupname> <xmpp1> <xmpp2>\nAdd xmpp to group'       + le
+        print '/group rm <groupname> <xmpp1> <xmpp2>\nRemove xmpp from group'   + le
+        print 'Shift + PgUp/PgDn\nScroll terminal up/dn'                        + le
+        print '/store <tmp f.name> <output f.name>\nSave received tmp file'     + le
+        print '/store <tmp f.name> r\nDiscart and overwrite received tmp file ' + le
+        print '/store list\nRequest Rx.py to list pending tmp files '           + le
+        print ''
+
+    else:
+        print 'List of commands:'
+        print ' /about'               + 16 * ' ' + 'Show information about TFC'
+        print " /clear & '  '"        + 9  * ' ' + 'Clear screens'
+        print ' /file <file name>'    + 5  * ' ' + 'Send file to recipient'
+        print ' /help'                + 17 * ' ' + 'Display this list of commands'
+        print ' /logging <on/off>'    + 5  * ' ' + 'Enable/disable logging on Rx.py'
+        print ' /msg <ID/xmpp/group>' + 2  * ' ' + 'Change recipient'
+        print ' /names'               + 16 * ' ' + 'Displays available contacts'
+        print ' /nick <nick>'         + 10 * ' ' + "Change contact's nickname"
+        print ' /paste'               + 16 * ' ' + 'Enable paste-mode'
+        print ' /quit & /exit'        + 9  * ' ' + 'Exits TFC'
+        print ' Shift + PgUp/PgDn'    + 5  * ' ' + 'Scroll terminal up/down'
+
+        print width * '-' + '\nGroup management:\n'
+
+        print ' /groups'              + 15 * ' ' + 'List currently available groups'
+        print ' /group'               + 16 * ' ' + 'List members of selected group'
+        print ' /group <group name>'  + 3  * ' ' + 'List members of <groupname>\n'
+
+        print (' /group create <group name> <xmpp 1> <xmpp 2> .. <xmpp n>       \n'
+               '   Create new group named <group name>, add xmpp-addresses.     \n'
+               '   Ask to overwrite current group if it exists.                 \n')
+
+        print (' /group add <group name> <xmpp 1> <xmpp 2> .. <xmpp n>          \n'
+               '   Add list of XMPP-addresses to group <group name>             \n'
+               '   Ask to create group if it does not already exist.           \n')
+
+        print (' /group rm <group name> <xmpp 1> <xmpp 2> .. <xmpp n>           \n'
+               '   Remove xmpp-addresses from group <group name>.               \n'
+               '   Ask to remove group if no xmpp addresses are provided.      \n')
+
+        print width * '-' + '\nFile storing:\n'
+
+        print (' /store <tmp file name> <output file name>  \n ' + 41 * '-' + '\n'
+               '   Decode received file stored by Rx.py as <tmp file name>    \n'
+               '   and store it as <output file name>. Shreds <tmp file name>.\n')
+
+        print (' /store <tmp file name> r                   \n ' + 24 * '-' + '\n'
+               '   Discart temp file <tmp file name>.                          \n')
+
+        print (' /store list                                \n ' + 11 * '-' + '\n'
+               '   Request Rx.py to list of pending tmp file names.            \n')
+
+        return None
+
+
+def tab_complete(text, state):
+    """
+    Auto-tab completer.
+
+    :param text:  [not defined]
+    :param state: [not defined]
+    :return:      [not defined]
+    """
+
+    options  = [t for t in tab_get_list() if t.startswith(text)]
     try:
-        groupList = []
-
-        with open('g.' + groupName + '.tfc', 'r') as file:
-            members = file.readlines()
-
-        for member in members:
-            groupList.append(member.strip('\n'))
-
-        if not groupList and output:
-            os.system('clear')
-            print 'Group is empty. Add contacts to group with command\n   /group add <group name> <xmpp>\n'
-
-        return groupList
-
-    except IOError:
-        exit_with_msg('ERROR! Group file g.' + selectedGroup + '.tfc could not be loaded.')
+        return options[state]
+    except IndexError:
+        return None
 
 
+def tab_get_list():
+    """
+    Create list for automatic tab completer.
 
-######################################################################
-#                              PRE LOOP                              #
-######################################################################
+    :return: List of autotabs.
+    """
 
-# Set initial values.
-os.chdir(sys.path[0])
-pastemode     = False
-selectedGroup = ''
+    auto_tabs = []
 
-# Run initial checks.
-chk_pkgSize()
-search_keyfiles()
+    auto_tabs += ['about', 'add ', 'clear', 'create ', 'exit', 'file ', 'group ', 'help',
+                  'logging ', 'msg ', 'nick ', 'quit', 'rm ', 'select ', 'store ']
 
-# Load initial data.
-keyFileNames, contacts = get_keyfile_list()
-add_keyfiles(keyFileNames)
+    auto_tabs += [(c + ' ') for c in get_list_of_xmpp_addr()]
+    auto_tabs += [(g + ' ') for g in get_list_of_groups()]
 
-# Initialize autotabbing.
-readline.set_completer(tab_complete)
-readline.parse_and_bind('tab: complete')
-
-os.system('clear')
-print 'TFC ' + version + ' || Tx.py ' + 3 * '\n'
-
-# Contact selection.
-idSelDist  = print_list_of_contacts()
-xmpp, nick = select_contact(idSelDist)
+    return auto_tabs
 
 
+def yes(prompt):
+    """
+    Prompt user a question that is answered with yes / no.
 
-######################################################################
-#                                LOOP                                #
-######################################################################
+    :param prompt: Question to be asked
+    :return:       True if user types y(es), False if user types n(o).
+    """
 
-os.system('clear')
+    # Verify input parameter type.
+    if not isinstance(prompt, str):
+        exit_with_msg('CRITICAL ERROR! M(yes): Wrong input type.')
 
-while True:
+    while True:
+        try:
+            selection = raw_input(prompt + ' (y/n): ')
+        except KeyboardInterrupt:
+            return False
 
-    # Refresh lists.
-    autotabs      = get_autotabs(contacts)
-    groupFileList = get_group_list(False)
+        if selection.lower() in ('yes', 'y'):
+            return True
+        elif selection.lower() in ('no', 'n'):
+            return False
+
+
+##################################################################
+#                         MULTIPROCESSING                        #
+##################################################################
+
+def sender_process():
+    """
+    Look for messages in mq, send noise-packets if not found.
+
+    :return: [no return value]
+
+    This function uses a cryptographically secure coin
+    toss to create boolean values 1/2 : 1/2 ratio:
+      Single byte B loaded from /dev/urandom has 256
+    possible ord values - 128 even, 128 odd. By reducing
+    the ord(B) value modulo 2, 1 or 0 is obtainedwith
+    equal probability.
+
+    This function first checks if queue has data in it.
+    If it doesn't, it'll output noise messages and
+    commands with 1:1 ratio. If queue has data, it first
+    checks if it was a command: this determines the values
+    used in the next coin toss.
+
+    If loaded data was a command, independent coin tosses
+    decide when to send the command: 1 for sending command,
+    0 for outputting a noise message.
+
+    If loaded data wasn't a command, independent coin tosses
+    decide when to send the message: 1 for sending message,
+    0 for outputting a noise command.
+
+    If message is long, between every sent packet, the coin is
+    tossed to determine whether a noise message is sent.
+
+    This way, 1:1 ratio between command and message packets is
+    always retained. Thus, guessing when communication takes
+    place becomes much harder.
+    """
+
+    while True:
+
+        sys.stdout.write('\r' + ' ' * (len(readline.get_line_buffer())) + '\r')
+
+        if mq.empty():
+            if ord(os.urandom(1)) % 2 == 1:
+                command_transmit('TFCNOISECOMMAND')
+                ct_sleep()
+            else:
+                main_loop('TFCNOISEMESSAGE')
+                ct_sleep()
+
+        else:
+            mesg    = mq.get()
+            was_cmd = False
+            for c in ['/clear', ' ', '/store ', '/logging ', '/nick ']:
+                    if mesg.startswith(c):
+                        was_cmd = True
+
+            if was_cmd:
+                while was_cmd:
+                    if ord(os.urandom(1)) % 2 == 1:
+                        main_loop(mesg)
+                        ct_sleep()
+                        was_cmd = False
+                    else:
+                        main_loop('TFCNOISEMESSAGE')
+                        ct_sleep()
+
+            else:
+                was_msg = True
+                while was_msg:
+                    if ord(os.urandom(1)) % 2 == 1:
+                        main_loop(mesg)
+                        ct_sleep()
+                        was_msg = False
+                    else:
+                        command_transmit('TFCNOISECOMMAND')
+                        ct_sleep()
+
+
+def input_process(queue, fileno):
+    """
+    Get messages from raw_input, add them to mq.
+
+    :param queue:  The queue where messages are added.
+    :param fileno: Stdin file.
+    :return:       None.
+    """
+
+    sys.stdin = os.fdopen(fileno)
+    try:
+        while True:
+            if clear_input_screen:
+                os.system('clear')
+                print 'TFC-CEV %s || Tx.py || Constant transmission enabled\n\n'\
+                      'Disabled: Contact switching, paste-mode, groups.\n' % version
+
+            kb_string = raw_input('Message to %s: ' % xmpp)
+
+            if kb_string.startswith('/file '):
+                kb_string = load_file_data(kb_string)
+
+            for disabled in ['/msg', '/paste', '/group']:
+                if kb_string.startswith(disabled):
+                    print '\nError. Disabled command.\n'
+                    time.sleep(1.5)
+                    kb_string = ''
+                    continue
+
+            queue.put_nowait(kb_string)
+
+    except KeyboardInterrupt:
+        exit_with_msg('')
+
+
+##################################################################
+#                            MAIN LOOP                           #
+##################################################################
+
+def get_normal_input():
+    """
+    Get input either from raw_input or readlines
+    depending on whether paste_mode is enabled.
+
+    :return: Return the input user entered.
+    """
+
+    user_input = ''
+
+    global pastemode
+
+    if group:
+        prompt = 'Msg to group %s: ' % nick
+    else:
+        prompt = 'Msg to %s: '       % nick
 
     if pastemode:
         try:
             os.system('clear')
-            print 'Paste mode on || 2x ^D sends message || ^C exits\n' \
-                  'Msg to ' + nick + ':\n'
+            print 'TFC-CEV %s || Tx.py\n' % version
+            print 'Paste mode on || 2x ^D sends message || ^C exits\n\n%s\n' % prompt
+
             try:
-                lines     = sys.stdin.readlines()
+                lines = sys.stdin.readlines()
             except IOError:
                 print '\nError in STDIO. Please try again.\n'
                 time.sleep(1)
-                continue
+                return ''
 
-            userInput = '\n' + ''.join(lines)
+            user_input = '\n' + ''.join(lines)
             print '\nSending...'
-            time.sleep(0.1)
+            time.sleep(0.25)
 
         except KeyboardInterrupt:
+            os.system('clear')
+            print 'TFC-CEV %s || Tx.py\n' % version
+            print 'Closing paste mode...\n\n%s\n' % prompt
             pastemode = False
-            userInput = ''
-            print '\nClosing paste mode...'
-            time.sleep(0.4)
+            time.sleep(0.25)
             os.system('clear')
-            continue
-
-    if not pastemode:
-        try:
-            userInput = raw_input('Msg to ' + nick + ': ')
-
-        except KeyboardInterrupt:
-            exit_with_msg('Exiting TFC.', False)
-
-
-
-    ##################################################################
-    #                    GROUP MANAGEMENT COMMANDS                   #
-    ##################################################################
-
-    # List group members.
-    if userInput in ['/group', '/group ']:
-
-        if selectedGroup == '':
-            os.system('clear')
-            print 'No group selected\n'
-            continue
-
-        else:
-            membersOfGroup = get_group_members(selectedGroup)
-
-        if membersOfGroup:
-            os.system('clear')
-            print 'Members of selected group \'' + selectedGroup + '\':'
-            for member in membersOfGroup:
-                print '   ' + member
-            print ''
-        continue
-
-
-    # List available groups.
-    if userInput == '/groups':
-        groupFileList = get_group_list(True)
-        if groupFileList:
-            os.system('clear')
-            print 'Current groups and their members: '
-            for group in groupFileList:
-                print '   ' + group
-
-                if not get_group_members(group, False):
-                    print '       Empty group'
-
-                for member in get_group_members(group, False):
-                    print '     - ' + member
-
-        print ''
-        continue
-
-
-    # Create new group.
-    if userInput.startswith('/group create '):
-        userInput = ' '.join(userInput.split())
-
-
-        # Create list of names group can not have.
-        reservedNames = ['create', 'add', 'rm']
-        for fileName in keyFileNames:
-            reservedNames.append(get_nick(fileName[:-2])) # Append nicknames.
-            reservedNames.append(fileName[:-2])           # Append XMPP-file.
-            reservedNames.append(fileName[3:][:-2])       # Append XMPP-addr.
-
-
-        # Check that group name is not reserved.
-        newGroupName = userInput.split(' ')[2]
-        if newGroupName == '':
-            os.system('clear')
-            print 'Error: Group name can\'t be empty.\n'
-            continue
-        if newGroupName in reservedNames:
-            os.system('clear')
-            print 'Error: Group name can\'t be command, nick or XMPP-address.\n'
-            continue
-
-
-        os.system('clear')
-        memberList = userInput.split(' ')
-        members    = []
-        notAdded   = []
-        i          = 3
-
-        while i < len(memberList):
-            newMember = str(memberList[i])
-            mbrFile   = 'tx.' + newMember + '.e'
-            i += 1
-
-            if (mbrFile in keyFileNames) and (mbrFile not in ['tx.local.e', 'rx.local.e']):
-                members.append(newMember)
-            else:
-                notAdded.append(newMember)
-
-
-        if group_create(newGroupName, members):
-
-            if members:
-                print 'Created group \'' + newGroupName + '\' with following members:'
-                for member in members:
-                    print '   ' + member
-                print ''
-
-            else:
-                print '\nCreated empty group \'' + newGroupName + '\'\n'
-
-            if notAdded:
-                print '\nUnknown contacts not added to group \'' + newGroupName + '\':'
-                for member in notAdded:
-                    print '   ' + member
-                print ''
-            continue
-
-        else:
-            print '\nGroup generation cancelled.\n'
-            continue
-
-
-    # Add member to group.
-    if userInput.startswith('/group add '):
-
-        userInput = ' '.join(userInput.split())
-        groupName = userInput.split(' ')[2]
-
-        xmppList  = []
-        i         = 3
-
-        while i < len(userInput.split(' ')):
-            member  = userInput.split(' ')[i]
-            mbrFile = 'tx.' + member + '.e'
-            i      += 1
-
-            if mbrFile not in ['tx.local', 'rx.local']:
-                xmppList.append(member)
-
-        group_add_member(groupName, xmppList)
-        continue
-
-
-    # Remove member from group.
-    if userInput.startswith('/group rm '):
-
-        userInput     = ' '.join(userInput.split())
-        selectedGroup = userInput.split(' ')[2]
-
-        if not selectedGroup in groupFileList:
-            print '\nError: Invalid group\n'
-            continue
-
-        rmList = []
-        i      = 3
-        while i < len(userInput.split(' ')):
-            member = userInput.split(' ')[i]
-            i += 1
-            rmList.append(member)
-
-        group_rm_member(selectedGroup, rmList)
-        print ''
-        continue
-
-
-    # Select group.
-    if userInput.startswith('/group '):
-
-        userInput = ' '.join(userInput.split())
-        newGroup  = userInput.split(' ')[1]
-
-        if newGroup == '':
-            print '\nError: Invalid group\n'
-            continue
-
-        if not newGroup in groupFileList:
-            print '\nError: Invalid group\n'
-            continue
-
-        else:
-            selectedGroup = nick = newGroup
-            os.system('clear')
-            print 'Now sending messages to group \'' + nick + '\'\n'
-            continue
-
-
-
-    ##################################################################
-    #                      OTHER LOCAL COMMANDS                      #
-    ##################################################################
-
-    if emergencyExit:
-        if userInput == '  ':
-            quit_process(False)
-
-
-    if userInput == '  ' or userInput == '/clear':
-        if localTesting:
-            with open('TxOutput', 'w+') as file:
-                file.write('CLEARSCREEN ' + xmpp + '\n')
-        else:
-            port.write('CLEARSCREEN ' + xmpp + '\n')
-
-        os.system('clear')
-        continue
-
-
-    if userInput == '/quit' or userInput == '/exit':
-        quit_process(True)
-
-
-    if userInput == '':
-        continue
-
-
-    if userInput == '/debugging on':
-        debugging = True
-        os.system('clear')
-        print '\nDebugging enabled\n'
-        continue
-
-
-    if userInput == '/debugging off':
-        debugging = False
-        os.system('clear')
-        print '\nDebugging disabled\n'
-        continue
-
-
-    if userInput == '/help':
-        os.system('clear')
-        print_help()
-        continue
-
-
-    if userInput == '/paste':
-        pastemode = True
-        continue
-
-
-    if userInput == '/about':
-        os.system('clear')
-        print ' Tinfoil Chat ' + version + '\n'
-        print ' https://github.com/maqp/tfc-cev/\n'
-        print ' cs.helsinki.fi/u/oottela/tfc.pdf'
-        print '                         /tfc-manual.pdf\n\n'
-        continue
-
-
-    if userInput == '/names':
-        os.system('clear')
-        print ''
-        print_list_of_contacts()
-        print ''
-        continue
-
-
-    if userInput.startswith('/msg '):
-        try:
-            selection = str(userInput.split(' ')[1])
-
-            if selection in groupFileList:
-                nick = selectedGroup = selection
-                os.system('clear')
-                print 'Now sending messages to group \'' + selectedGroup + '\'\n'
-                continue
-
-
-            if selection in contacts:
-                    if selection != 'tx.local':
-                        xmpp = 'tx.' + selection
-                        nick = get_nick(xmpp)
-                        selectedGroup = ''
-                        os.system('clear')
-                        print 'Now sending messages to ' + nick + ' (' + xmpp[3:] + ')\n'
-                        continue
-
-            else:
-                try:
-                    xmpp, nick = select_contact('', selection, False)
-
-                except ValueError:
-                    print '\nError: Invalid contact selection.\n'
-                    continue
-
-                except IndexError:
-                    print '\nError: Invalid contact selection.\n'
-                    continue
-
-                selectedGroup = ''
-                os.system('clear')
-                print 'Now sending messages to ' + nick + ' (' + xmpp[3:] + ')\n'
-                continue
-
-        except ValueError:
-            continue
-        except AttributeError:
-            pass
-        except UnboundLocalError:
-            continue
-
-
-
-    ##################################################################
-    ##                      ENCRYPTED COMMANDS                      ##
-    ##################################################################
-
-    if userInput.startswith('/nick ') or userInput.startswith('/logging ') or userInput.startswith('/store ') or userInput.startswith('/newkf '):
-        command = ''
-
-        # Check that local keyfile exists.
-        if not os.path.isfile('tx.local.e'):
-            print '\nError: Keyfile \'tx.local.e\' was not found. Command was not sent.\n'
-            continue
-
-
-        ################
-        #     NICK     #
-        ################
-        if userInput.startswith('/nick '):
-            if nick in groupFileList:
-                print '\nGroup is selected, no nick was changed.\n'
-                continue
-
-            if len(userInput) < 7:
-                print 'Error: Can\'t give empty nick.'
-                continue
-
-            newNick = userInput.split(' ')[1]
-
-            # Check that specified nick is acceptable.
-            if '=' in newNick or '/' in newNick:
-                print '\nError: Nick can not contain reserved characters / or =\n'
-                continue
-
-            if (newNick == 'tx.local') or (newNick == 'rx.local'):
-                print '\nError: Can\'t give reserved nick of local.e to contact.\n'
-                continue
-
-            if newNick in groupFileList:
-                print '\nError: Nick is in use for group.\n'
-                continue
-
-            write_nick(xmpp, newNick)
-            nick = get_nick(xmpp)
-
-            os.system('clear')
-            print '\nChanged ' + xmpp[3:] + ' nick to ' + nick + '\n'
-            command = 'NICK rx.' + xmpp[3:] + ' ' + nick
-
-
-        ###################
-        #     LOGGING     #
-        ###################
-        if userInput.startswith('/logging '):
-
-            value = str(userInput.split(' ')[1])
-
-            if value   == 'on':
-                command = 'LOGSON'
-
-            elif value == 'off':
-                command = 'LOGSOFF'
-
-            else:
-                print '\nError: Invalid command\n'
-                continue
-
-
-        ########################
-        #     FILE STORING     #
-        ########################
-        if userInput.startswith('/store '):
-            try:
-                params  = userInput.split(' ')
-                command = 'STOREFILE ' + params[1] + ' ' + params[2]
-            except IndexError:
-                print '\nError: Invalid command.\n'
-                continue
-
-
-        ########################
-        #    COMMAND PACKET    #
-        ########################
-        cmd_msg_process(command)
-        continue
-
-
-
-    ################################
-    #     PACKETS TO RECIPIENT     #
-    ################################
-
-    # All packets to recipients have header {s,l,a,e}{m,f}. 'm' stands for message.
-    if not userInput.startswith('/file '):
-        userInput = 'm' + userInput
-
-
-
-    #############################
-    #     FILE TRANSMISSION     #
-    #############################
-
-    if userInput.startswith('/file '):
-
-        fileName = userInput.split(' ')[1]
-        if not os.path.isfile(fileName):
-            print '\nError: Could not find file' + fileName + '\n'
-            continue
-
-
-        if nick in groupFileList:
-            sendTarget = 'all members of group \'' + nick + '\''
-        else:
-            sendTarget = xmpp[3:]
-
-
-        if raw_input('\nThis will send file \'' + fileName + '\' to ' + sendTarget + '.\nAre you sure? Type upper case YES to continue: ') == 'YES':
-            subprocess.Popen('base64 ' + fileName + ' > TFCtmpFile', shell=True).wait()
-
-            with open('TFCtmpFile', 'r') as file:
-                b64File     = file.readlines()
-                fileContent = ''
-                for line in b64File:
-                    fileContent += line
-
-            if fileContent == '':
-                os.system('clear')
-                print 'Error: target file \'' + fileName + '\'  was empty. Transmission aborted.\n'
-                continue
-
-            # All packets to recipients have header {s,l,a,e}{m,f}. 'f' stands for file.
-            userInput = 'f' + fileContent
-            subprocess.Popen('shred -n ' + str(shredIterations) + ' -z -u TFCtmpFile', shell=True).wait()
-
-            os.system('clear')
-            print '\nSending file ' + fileName
-
-        else:
-            print '\nFile sending aborted\n'
-            time.sleep(0.4)
-            continue
-
-
-    if userInput.startswith('m/'):
-        os.system('clear')
-        print '\nError: Unknown command \'' + userInput[1:] + '\'\n'
-        continue
-
-
-
-    ##################################################################
-    #                      MULTICASTED MESSAGES                      #
-    ##################################################################
-
-    if nick in groupFileList:
-
-        groupMemberList = get_group_members(selectedGroup, False)
-
-        if not groupMemberList:
-            os.system('clear')
-            if userInput.startswith('f'):
-                print 'Currently selected group is empty. No file was sent.\n'
-            if userInput.startswith('m'):
-                print 'Currently selected group is empty. No message was sent.\n'
-            continue
-
-        for member in groupMemberList:
-            print '           > ' + member
-            xmpp = 'tx.' + member
-
-            if len(userInput) > PkgSize:
-                long_msg_process(userInput, xmpp)
-
-            else:
-                short_msg_process(userInput, xmpp)
-            time.sleep(0.1)
-        time.sleep(0.1)
-        print ''
-
-
-
-    ##################################################################
-    #                        STANDARD MESSAGES                       #
-    ##################################################################
+            return ''
 
     else:
-        if len(userInput) > PkgSize:
-            long_msg_process(userInput, xmpp)
+        try:
+            if clear_input_screen:
+                os.system('clear')
+                print 'TFC-CEV %s || Tx.py \n\n\n' % version
+            user_input = raw_input(prompt)
+
+            if user_input == '/paste':
+                pastemode = True
+                return ''
+
+        except KeyboardInterrupt:
+            if c_transmission:
+                # Sleep just to make sure all keys are written.
+                time.sleep(0.5)
+            exit_with_msg('')
+
+    return user_input
+
+
+def main_loop(user_input):
+    """
+    Get user_input, xmpp and nick and send a command / message based on that.
+
+    :param user_input: Message, noise packet or command.
+    :return:           None.
+    """
+
+    # Verify input parameter type.
+    if not isinstance(user_input, str):
+        exit_with_msg('CRITICAL ERROR! M(main_loop): Wrong input type.')
+
+    global debugging
+
+    while True:
+
+        if not c_transmission:
+
+            global xmpp
+            global nick
+            global group
+
+            if nick not in get_list_of_targets():
+
+                os.system('clear')
+                print 'TFC-CEV %s || Tx.py\n' % version
+                print 'No contact is currently active.\n'
+                group      = ''
+                xmpp, nick = select_contact(print_contact_list())
+                os.system('clear')
+                print "\nNow sending messages to '%s' (%s)\n" % (nick, xmpp)
+
+            user_input = get_normal_input()
+
+        # Re-initialize tab autocomplete.
+        readline.set_completer(tab_complete)
+        readline.parse_and_bind('tab: complete')
+
+        ##################################################################
+        #                    GROUP MANAGEMENT COMMANDS                   #
+        ##################################################################
+
+        # Create new group.
+        if user_input.startswith('/group create '):
+            group_create(user_input)
+
+        # List members of active group.
+        elif user_input == '/group':
+            print_group_members(group)
+
+        # Add member to group.
+        elif user_input.startswith('/group add '):
+            group_add_member(user_input)
+
+        # Remove member from group.
+        elif user_input.startswith('/group rm '):
+            group_rm_member(user_input)
+
+        # List members of specified group.
+        elif user_input.startswith('/group '):
+            print_group_members(user_input.split(' ')[1])
+
+        # List available groups (and their members).
+        elif user_input == '/groups':
+            print_group_list()
+
+        ##################################################################
+        #                      OTHER LOCAL COMMANDS                      #
+        ##################################################################
+
+        elif user_input.startswith('/msg '):
+            change_recipient(user_input)
+
+        elif user_input in ['/quit', '/exit']:
+            quit_process(True)
+
+        elif user_input == '/debugging on':
+            ch_debug(True)
+
+        elif user_input == '/debugging off':
+            ch_debug(False)
+
+        elif user_input == '/help':
+            print_help()
+
+        elif user_input == '/about':
+            print_about()
+
+        elif user_input == '/names':
+            print_contact_list(True)
+
+        elif user_input == '  ':
+            if emergency_exit:
+                quit_process()
+            else:
+                clear_screens(xmpp)
+
+        elif user_input == '/clear':
+            clear_screens(xmpp)
+
+        elif user_input == '':
+            if c_transmission:
+                break
+            else:
+                continue
+
+        ##################################################################
+        #                       ENCRYPTED COMMANDS                       #
+        ##################################################################
+
+        elif user_input.startswith('/nick '):
+            change_nick(xmpp, user_input)
+
+        elif user_input.startswith('/logging '):
+            change_logging(user_input)
+
+        elif user_input.startswith('/store '):
+            save_file(user_input)
+
+        elif user_input.startswith('/') and not user_input.startswith('/file '):
+            print '\nError: Invalid command.\n'
+            if c_transmission:
+                break
+            else:
+                continue
+
+        elif user_input == 'TFCNOISECOMMAND':
+            command_transmit(user_input)
 
         else:
-            short_msg_process(userInput, xmpp)
+            if group and c_transmission:
+                print '\nWARNING! Constant transmission is enabled.\nGroup ' \
+                      'messaging is disabled.\nPress enter to continue.'
+                group = ''
+                break
+
+            #############################
+            #     FILE TRANSMISSION     #
+            #############################
+
+            if user_input.startswith('/file '):
+                user_input = load_file_data(user_input)
+
+                if user_input == 'ABORT':
+                    if c_transmission:
+                        break
+                    else:
+                        continue
+
+            if user_input.startswith('TFCPROCESSEDFILE'):
+                send_msg_or_file(user_input[16:])
+
+            ##############################
+            #    MESSAGE TRANSMISSION    #
+            ##############################
+
+            else:
+                user_input = 'm' + user_input
+                send_msg_or_file(user_input)
+
+        if c_transmission:
+            break
 
 
+##################################################################
+#                              MAIN                              #
+##################################################################
+
+# Set default directory.
+os.chdir(sys.path[0])
+
+# Run self tests.
+tfc_cev_self_test()
+chk_pkg_size()
+
+# Enable serial port if local testing is disabled.
+if not local_testing:
+    port = serial.Serial(serial_device, serial_baudrate, timeout=0.1)
+
+# Search keyfiles.
+search_keyfiles()
+
+# Add new keyfiles.
+add_keyfiles()
+
+# Set default gobal variables.
+group     = ''
+pastemode = False
+
+# Initialize tab-autocomplete.
+readline.set_completer(tab_complete)
+readline.parse_and_bind('tab: complete')
+
+# Print header.
+os.system('clear')
+print 'TFC-CEV %s || Tx.py\n\n\n' % version
+
+# Select contact.
+caret_dst  = print_contact_list()
+xmpp, nick = select_contact(caret_dst)
+
+os.system('clear')
+
+# Initialize multiprocessing when c_transmission is True.
+if c_transmission:
+    mq = Queue()
+    fn = sys.stdin.fileno()
+
+    qp = Process(target=input_process, args=(mq, fn))
+    se = Process(target=sender_process)
+
+    qp.start()
+    se.start()
+    qp.join()
+
+# Else default msg input.
+else:
+    try:
+        main_loop('')
+
+    except KeyboardInterrupt:
+        exit_with_msg('')

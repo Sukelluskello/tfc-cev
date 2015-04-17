@@ -280,8 +280,9 @@ Tinfoil chat 0.5.4 update log
                        protected by a big fucking pile of paranoid cascading crypto
                        and security through obscurity.
 
-                    2. Keys are moved via data diode to RxM like environment, from
-                       which the signature is read on screen in QR format.
+                    2. Installers to be signed are moved via data diode to RxM like
+                       environment, from which the signature is read on screen in 
+                       QR format and uploaded to github.
                     
                        This will slow down the rate at which updates are publised
                        excluding cases where a vulnerability has been found.
